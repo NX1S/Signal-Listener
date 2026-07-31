@@ -21,14 +21,15 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
 const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 
-const signalSummaryPrompt = `You are a trading signal formatter. Extract the following from the message and return ONLY a JSON object:
+const signalSummaryPrompt = `You are a trading signal formatter. Extract the following from the message and return ONLY a JSON object, no explanations or thoughts:
 
 {
   "valid": true,
   "positionType": "BUY" or "SELL",
   "entry": number or null,
   "tp": number or null,
-  "sl": number or null
+  "sl": number or null,
+  "isUpdate": true or false
 }
 
 Rules:
@@ -36,7 +37,8 @@ Rules:
 - positionType must be uppercase "BUY" or "SELL"
 - Use null for missing prices, never 0 or empty string
 - If price range given, use lowest for BUY, highest for SELL
-- If multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
+- When multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
+- If the signal is an update to a previous signal, set isUpdate to true.
 - Return ONLY the JSON object, no markdown, no explanations
 
 Message to analyze:
@@ -254,14 +256,6 @@ function attachMessageHandler(socket) {
 
             console.log(`[${getCurrentTime()}][INFO] Recieved signal.`);
 
-            const isUpdate = isSignalUpdate(sourceId);
-            if (isUpdate) {
-                console.log(`[${getCurrentTime()}][INFO] Signal is an update, processing as update.`);
-            } else {
-                recordSignalTime(sourceId);
-                console.log(`[${getCurrentTime()}][INFO] New signal recorded.`);
-            }
-
             const fileData = fs.readFileSync("data.json", "utf8");
             const dataObj = JSON.parse(fileData || "{}");
             if (!dataObj.whitelistedGroups) dataObj.whitelistedGroups = {};
@@ -287,18 +281,104 @@ function attachMessageHandler(socket) {
                 continue; // Not a signal
             }
 
+            const messageId = msg.key.id;
+
+            // ─── CHECK IF COMPLETE ───
+            if (!isCompleteSignal(parsed)) {
+                storePendingSignal(sourceId, parsed, messageId);
+                console.log(`[${getCurrentTime()}][INFO] Incomplete signal buffered for ${sourceId}. Waiting for details...`);
+                continue;
+            }
+
+            // ─── CHECK FOR PENDING SIGNAL ───
+            const pending = getPendingSignal(sourceId);
+            const isUpdate = !!pending;
+            const originalId = pending?.messageId || null;
+
+            if (isUpdate) {
+                clearPendingSignal(sourceId);
+                console.log(`[${getCurrentTime()}][INFO] Completing signal from ${originalId}`);
+            } else {
+                console.log(`[${getCurrentTime()}][INFO] New complete signal recorded.`);
+            }
+
             const { positionType, entry, tp, sl } = parsed;
             console.log('-'.repeat(80));
             console.log(parsed);
             console.log('-'.repeat(80));
-            // entry/bid is now explicitly named — no index confusion
-            const messageId = msg.key.id;
             console.log("AI Response: " + positionType + " " + entry + " " + tp + " " + sl + "\nMessage ID: " + messageId);
             console.log('-'.repeat(80));
 
-            await sendToMT5(positionType, entry, tp, sl, messageId, isUpdate);
+            await sendToMT5(positionType, entry, tp, sl, messageId, isUpdate, originalId);
         }
     });
+}
+
+// ─── HELPER FUNCTIONS ───
+function isCompleteSignal(parsed) {
+    return parsed.valid && parsed.entry !== null && parsed.tp !== null && parsed.sl !== null;
+}
+
+function getPendingSignals() {
+    try {
+        const data = fs.readFileSync("pendingSignals.json", "utf8");
+        return JSON.parse(data || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function savePendingSignals(signals) {
+    fs.writeFileSync("pendingSignals.json", JSON.stringify(signals, null, 2), "utf8");
+}
+
+function storePendingSignal(sourceId, parsed, messageId) {
+    const pending = getPendingSignals();
+    pending[sourceId] = { ...parsed, messageId, timestamp: Date.now() };
+    savePendingSignals(pending);
+}
+
+function getPendingSignal(sourceId) {
+    const pending = getPendingSignals();
+    const signal = pending[sourceId];
+    
+    if (!signal) return null;
+    if (Date.now() - signal.timestamp > 10 * 60 * 1000) {
+        delete pending[sourceId];
+        savePendingSignals(pending);
+        return null;
+    }
+    
+    return signal;
+}
+
+function clearPendingSignal(sourceId) {
+    const pending = getPendingSignals();
+    delete pending[sourceId];
+    savePendingSignals(pending);
+}
+
+// ─── UPDATED SEND TO MT5 ───
+async function sendToMT5(type, bid, tp, sl, messageId, isUpdate, originalMessageId) {
+    const action = isUpdate ? "UpdatePosition" : "OpenPosition";
+    if (pipeSocket && !pipeSocket.destroyed) {
+        const message = JSON.stringify({
+            action,
+            type,
+            bid,
+            tp,
+            sl,
+            positionId: isUpdate ? originalMessageId : messageId,
+            updateId: isUpdate ? messageId : null,
+            timestamp: Date.now()
+        }) + '\n';
+        pipeSocket.write(message, (err) => {
+            if (err) console.error(`[${getCurrentTime()}][ERROR] Pipe write error:`, err);
+            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5`);
+        });
+    } else {
+        console.log(`[${getCurrentTime()}][WARN] MT5 not connected`);
+    }
 }
 
 // ─── MAIN ENTRY ───
@@ -310,27 +390,6 @@ function attachMessageHandler(socket) {
     console.log('🚀 Listener started. Waiting for QR code...');
     await connectWhatsApp();
 })();
-
-async function sendToMT5(type, bid, tp, sl, messageId, isUpdate) {
-    const action = isUpdate ? "UpdatePosition" : "OpenPosition";
-    if (pipeSocket && !pipeSocket.destroyed) {
-        const message = JSON.stringify({
-            action,
-            type,
-            bid,
-            tp,
-            sl,
-            positionId: messageId,
-            timestamp: Date.now()
-        }) + '\n';
-        pipeSocket.write(message, (err) => {
-            if (err) console.error(`[${getCurrentTime()}][ERROR] Pipe write error:`, err);
-            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5`);
-        });
-    } else {
-        console.log(`[${getCurrentTime()}][WARN] MT5 not connected`);
-    }
-}
 
 function getCurrentTime(date = new Date()) {
     const dd = String(date.getDate()).padStart(2, '0');
