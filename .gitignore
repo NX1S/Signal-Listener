@@ -5,4 +5,5 @@ Logs
 config.json
 data.json
 signalTimestamps.json
+signaldata.json
 *.log
