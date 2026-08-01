@@ -1,10 +1,9 @@
-import { TelegramClient, Logger } from "telegram";
-import { StringSession } from "telegram/sessions/index.js";
-import { NewMessage } from "telegram/events/index.js";
-import { GoogleGenAI } from "@google/genai";
-import dotenv from "dotenv";
-import fs from "fs";
-import { type } from "os";
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const { NewMessage } = require("telegram/events");
+const { GoogleGenAI } = require("@google/genai");
+const dotenv = require("dotenv");
+const fs = require("fs");
 
 dotenv.config(); // Load .env variables
 
@@ -45,17 +44,6 @@ client.setLogLevel('none');
 // ----------- Google AI Setup -----------
 
 const geminiAIRating = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_RATING });
-const geminiAICheck = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_CHECK });
-
-async function AiCheck(prompt) {
-    const response = await geminiAICheck.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        temperature: 0,
-    });
-    return response.text || "No output";
-}
-
 async function AiSummary(prompt) {
     const response = await geminiAIRating.models.generateContent({
         model: "gemini-2.5-flash",
@@ -175,15 +163,6 @@ async function filterChannelMessages(msg, sourceId) {
     const found = keywords.some(word => msg.message.toLowerCase().includes(word.toLowerCase()));
 
     if (found) {
-        let aiChecking;
-        try {
-            aiChecking = await AiCheck(signalCheckPrompt + msg.message);
-        } catch (err) {
-            console.error(`[${getCurrentTime()}][ERROR] AI error:`, err);
-            aiChecking = "AI checking failed.";
-            return null;
-        }
-
         const vipSources = ["2473656171", "2266717234", "4923847295", "2948171548"];
 
         if (aiChecking.trim().toLowerCase() === "true") {

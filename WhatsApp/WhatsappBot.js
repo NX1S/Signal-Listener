@@ -1,284 +1,437 @@
-// ============================================================
-// BAILEYS READ-ONLY WHATSAPP LISTENER (FIXED QR)
-// Copy-paste this into a file (e.g., listener.js) and run:
-//   npm init -y
-//   npm install @whiskeysockets/baileys pino qrcode-terminal
-//   node listener.js
-// ============================================================
-
-// --- 1. IMPORTS ---
 const { GoogleGenAI } = require('@google/genai');
 const dotenv = require('dotenv');
 const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
+const net = require('net');
+const path = require('path');
 
+dotenv.config();
 
-dotenv.config(); // Load .env variables
+const pipeName = '\\\\.\\pipe\\MT5Signal';
+let pipeServer;
+let pipeSocket;
 
-const botToken = process.env.BOT_TOKEN;
-const targetGroupId = parseInt(process.env.TARGET_GROUP_ID);
-const signalDestination = [-1003150924994, -4911865260];
+// ─── RECONNECTION STATE ───
+let sock = null;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
+const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 
-const signalSummaryPrompt = `You are a trading signal formatter.  Take the following trading signal message and extract the key values into the following format:
+const signalSummaryPrompt = `You are a trading signal formatter. Extract the following from the message and return ONLY a JSON object, no explanations or thoughts:
 
-"BUY||SELL LIMIT TP SL"
-"BUY||SELL 0000.00 0000.00 0000.00"
+{
+  "valid": true,
+  "positionType": "BUY" or "SELL",
+  "entry": number or null,
+  "tp": number or null,
+  "sl": number or null,
+  "isUpdate": true or false
+}
 
 Rules:
-- Replace every 0000.00 with the actual number, otherwise keep it if the number is absent.  
-- Always keep BUY/SELL uppercase.  
-- Always keep the order: Entry, Limit, TP, SL.
-- Do not analyze/put your thoughts on it, your only purpose is to format text.
-- Symbols are not allowed 
-Your only response should be nothing but the prompt.\n`;
+- If the message is not a trading signal, return {"valid": false}
+- positionType must be uppercase "BUY" or "SELL"
+- Use null for missing prices, never 0 or empty string
+- If price range given, use lowest for BUY, highest for SELL
+- When multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
+- If the signal is an update to a previous signal, set isUpdate to true.
+- Return ONLY the JSON object, no markdown, no explanations
 
-const signalCheckPrompt = `The following text is telling me to take a market position (only taking a position, not ads, not TP hits, not congratulations, not signals telling to take a position without any given numbers) reply "true" or "false", no other text: `;
-
-
-// ----------- Google AI Setup -----------
+Message to analyze:
+`;
 
 const geminiAIRating = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_RATING });
-const geminiAICheck = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_CHECK });
-
-async function AiCheck(prompt) {
-    const response = await geminiAICheck.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        temperature: 0,
-    });
-    return response.text || "No output";
-}
 
 async function AiSummary(prompt) {
     const response = await geminiAIRating.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.1-flash-lite",
         contents: prompt,
         temperature: 0,
     });
-    return response.text || "No output";
+
+    const textContent = response.text || "";
+    return textContent || "No output";
 }
 
-// ============================================================
-// --- MAIN FUNCTION ---
-// ============================================================
-(async () => {
+function createPipeServer() {
+    try {
+        require('fs').unlinkSync(pipeName);
+    } catch (e) { /* ignore if doesn't exist */ }
 
+    pipeServer = net.createServer((socket) => {
+        console.log(`[${getCurrentTime()}][INFO] MT5 connected to pipe`);
+        pipeSocket = socket;
 
-    // 1. check if data.json has the required fields. if not, create them
-    const fileConfig = fs.readFileSync("config.json", "utf8");
-    const obj = JSON.parse(fileConfig);
-    if (!obj.sources) obj.sources = [];
+        socket.on('end', () => {
+            console.log(`[${getCurrentTime()}][WARN] MT5 disconnected`);
+            pipeSocket = null;
+        });
 
+        socket.on('error', (err) => {
+            console.error(`[${getCurrentTime()}][ERROR] Socket error:`, err.message);
+            pipeSocket = null;
+        });
 
-    // --- 2a. AUTH STATE SETUP ---
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-
-    // --- 2b. CREATE THE SOCKET ---
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        // printQRInTerminal: true,  // ← This sometimes fails silently
+        socket.on('close', () => {
+            console.log(`[${getCurrentTime()}][INFO] Socket closed`);
+            pipeSocket = null;
+        });
     });
 
-    // ============================================================
-    // --- 3. CONNECTION STATUS + QR CODE ---
-    // ============================================================
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // --- QR CODE HANDLER ---
-        // When qr is present, print it to terminal using qrcode-terminal
-        if (qr) {
-            console.log('\n📱 Scan this QR code with WhatsApp → Settings → Linked Devices:\n');
-            qrcode.generate(qr, { small: true });
-            console.log('\n');
-        }
-
-        if (connection === 'open') {
-            console.log('Connected to WhatsApp!');
-        }
-
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting:', shouldReconnect);
-            if (!shouldReconnect) {
-                console.log('   → Logged out. Delete auth_info_baileys folder and scan QR again.');
-            }
-        }
+    pipeServer.listen(pipeName, () => {
+        console.log(`[${getCurrentTime()}][INFO] Pipe server listening on ${pipeName}`);
     });
 
-    // --- 3b. CREDENTIALS UPDATE ---
-    sock.ev.on('creds.update', saveCreds);
-
-    // ============================================================
-    // --- 4. MESSAGE LISTENER ---
-    // ============================================================
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        for (const msg of messages) {
-            if (msg.key.fromMe) continue;
-
-            const jid = msg.key.remoteJid;
-            const messageId = msg.key.id;
-            const timestamp = msg.messageTimestamp;
-
-            const isGroup = jid.endsWith('@g.us'); // group
-            const isChannel = jid.endsWith('@newsletter'); // channel
-            const isPrivate = jid.endsWith('@s.whatsapp.net'); // private message
-
-            let text = '';
-            const m = msg.message;
-
-            if (!m) {
-                text = '[NON-TEXT MESSAGE]';
-            } else if (m.conversation) {
-                text = m.conversation;
-
-            } else if (m.extendedTextMessage?.text) {
-                text = m.extendedTextMessage.text;
-
-            } else {
-                text = '[NON-TEXT MESSAGE]';
-            }
-
-            const senderID = msg.key.participant || jid;
-            const pushName = msg.pushName || 'Unknown';
-
-            console.log(`[${getCurrentTime()}][INFO] Recieved message.`);
-
-            /*//check if data.json has the required fields. if not, create them
-            const fileData = fs.readFileSync("data.json", "utf8");
-            const obj = JSON.parse(fileData);
-            if (!obj.sources) obj.sources = {};
-            if (!obj.sources[senderID]) obj.sources[senderID] = { sourceName: pushName, numberOfSignals: 0, win: 0, loss: 0 };
-
-            //counting signals by channel
-            obj.sources[senderID].numberOfSignals++;
-            fs.writeFileSync("data.json", JSON.stringify(obj, null, 2), "utf8");
-
-            //ai summary
-            let aiSummary;
-            try {
-                aiSummary = await AiSummary(signalSummaryPrompt + text);
-            } catch (err) {
-                console.error(`[${getCurrentTime()}][ERROR] AI error:`, err);
-                aiSummary = "AI Summary failed.";
-            }
-
-            console.log(aiSummary);
-            const AIOutputArray = aiSummary.split(" ");
-            const positionType = AIOutputArray[0];
-            const bid = Number(AIOutputArray[1]); // 0000.00 same as 0
-            const tp = Number(AIOutputArray[2]);
-            const sl = Number(AIOutputArray[3]);
-
-            // newSendMessageToTargets(positionType, bid, tp, sl);*/
-
-            const isReply = !!m?.extendedTextMessage?.contextInfo?.stanzaId;
-            const quotedMsgId = m?.extendedTextMessage?.contextInfo?.stanzaId || null;
-            const isForwarded = m?.extendedTextMessage?.contextInfo?.isForwarded || false;
-            const isViewOnce = !!m?.imageMessage?.viewOnce || !!m?.videoMessage?.viewOnce;
-
-            console.log('────────────────────────────────────────');
-            console.log(`📩 New Message [${type}]`);
-            console.log(`   Chat Type : ${isGroup ? 'GROUP' : isChannel ? 'CHANNEL' : 'PRIVATE'}`);
-            console.log(`   Sender    : ${senderID} (${pushName})`);
-            console.log(`   Text      : ${text}`);
-            console.log(`   JID       : ${jid}`);
-            console.log(`   Msg ID    : ${messageId}`);
-            console.log(`   Time      : ${new Date(timestamp * 1000).toISOString()}`);
-            console.log(`   Is Reply  : ${isReply} ${quotedMsgId ? '(to ' + quotedMsgId + ')' : ''}`);
-            console.log(`   Forwarded : ${isForwarded}`);
-            console.log(`   View Once : ${isViewOnce}`);
-            console.log('────────────────────────────────────────');
-        }
+    pipeServer.on('error', (err) => {
+        console.error(`[${getCurrentTime()}][ERROR] Pipe server error:`, err.message);
+        setTimeout(createPipeServer, 5000);
     });
+}
 
-    // ============================================================
-    // --- 5. KEEP ALIVE ---
-    // ============================================================
-    console.log('🚀 Listener started. Waiting for QR code...');
-    console.log('   If no QR appears in 5 seconds, make sure your terminal supports Unicode.');
-    console.log('   Press Ctrl+C to stop.');
+// ─── CONFIG HELPER ───
+function ensureConfigExists() {
+    const defaultConfig = {
+        whitelistedGroups: [],
+        destinations: []
+    };
 
-})();
-
-
-async function newSendMessageToTargets(type, bid, tp, sl) {
-    let message = `Position Type: ${type}\nBid: ${bid}\nTP: ${tp}\nSL:${sl}`;
-    const fileConfig = fs.readFileSync("config.json", "utf8");
-    const obj = JSON.parse(fileConfig);
-    if (!obj.destinations) obj.destinations = [];
-    for (const destination of obj.destinations) {
-        try {
-            await client.sendMessage(destination, { message: message });
-        } catch (err) {
-            console.error(`[${getCurrentTime()}][ERROR] Failed to send message to destination ${destination}.\n Am I in this group?`);
-        }
+    try {
+        fs.accessSync("config.json", fs.constants.F_OK);
+    } catch {
+        fs.writeFileSync("config.json", JSON.stringify(defaultConfig, null, 2), "utf8");
+        console.log(`[${getCurrentTime()}][INFO] Created default config.json`);
     }
 }
 
-async function filterChannelMessages(msg, sourceId) {
-    let keywords;
-    keywords = ["buy", "sell", "gold", "xauusd"];
-    /*switch (sourceId) {
-    
-        case "groupIDHere":
-            keywords = ["buy", "sell", "gold", "xauusd"];
-            break;
+// ─── DATA.JSON HELPER ───
+function ensureDataExists() {
+    try {
+        fs.accessSync("data.json", fs.constants.F_OK);
+    } catch {
+        fs.writeFileSync("data.json", "{}", "utf8");
+    }
+}
 
-        default:0
-            keywords = ["buy", "sell", "gold", "xauusd"];
-            break;
-    }*/
-    const found = keywords.some(word => msg.message.toLowerCase().includes(word.toLowerCase()));
-
-    if (found) {
-        let aiChecking;
-        try {
-            aiChecking = await AiCheck(signalCheckPrompt + msg.message);
-        } catch (err) {
-            console.error(`[${getCurrentTime()}][ERROR] AI error:`, err);
-            aiChecking = "AI checking failed.";
-            return null;
+// ─── CREDENTIAL CLEANUP HELPER ───
+function deleteAuthFolder() {
+    const authPath = path.resolve('auth_info_baileys');
+    try {
+        if (fs.existsSync(authPath)) {
+            fs.rmSync(authPath, { recursive: true, force: true });
+            console.log(`[${getCurrentTime()}][INFO] Deleted auth_info_baileys folder`);
+            return true;
         }
+        return false;
+    } catch (err) {
+        console.error(`[${getCurrentTime()}][ERROR] Failed to delete auth_info_baileys:`, err.message);
+        return false;
+    }
+}
 
-        const vipSources = ["2473656171", "2266717234", "4923847295", "2948171548"];
+// ─── RECONNECTION LOGIC ───
+function getBackoffDelay(attempt) {
+    // Exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s (capped)
+    const delay = Math.min(BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt), MAX_RECONNECT_DELAY_MS);
+    return delay;
+}
 
-        if (aiChecking.trim().toLowerCase() === "true") {
-            if (vipSources.includes(sourceId.toString())) {
-                console.log(`[${getCurrentTime()}][INFO] VIP Signal detected!`)
-                return "⚠️⚠️⚠️VIP SIGNAL⚠️⚠️⚠️\n\n" + msg.message + "\n\n⚠️⚠️⚠️VIP SIGNAL⚠️⚠️⚠️";
+function clearReconnectTimer() {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+}
+
+async function connectWhatsApp() {
+    // Prevent multiple simultaneous connection attempts
+    clearReconnectTimer();
+
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+
+        sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: 'silent' }),
+        });
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr) {
+                console.log('\n📱 Scan this QR code with WhatsApp → Settings → Linked Devices:\n');
+                qrcode.generate(qr, { small: true });
             }
-            else
-                return msg.message;
-        } else
-            console.console.error("AI Checking Failed.");
-    } else {
+
+            if (connection === 'open') {
+                reconnectAttempts = 0;
+                const phone = sock.user?.id?.split('@')[0] || 'Unknown';
+                const name = sock.user?.name || 'Unknown';
+                console.log(`[${getCurrentTime()}][INFO] Listener connected to WhatsApp using ${phone} || ${name}`);
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                if (!shouldReconnect) {
+                    console.log(`[${getCurrentTime()}][FATAL] Logged out. Clearing credentials...`);
+
+                    // Delete auth folder to force fresh QR on next startup
+                    deleteAuthFolder();
+
+                    console.log(`[${getCurrentTime()}][INFO] Stopped reconnecting. Restart the app to scan QR again.`);
+
+                    // Stop reconnection attempts permanently
+                    reconnectAttempts = MAX_RECONNECT_ATTEMPTS + 1;
+                    return;
+                }
+
+                // Log the disconnect reason
+                const reason = lastDisconnect?.error?.message || 'Unknown reason';
+                console.log(`[${getCurrentTime()}][WARN] WhatsApp disconnected: ${reason}`);
+
+                // Schedule reconnection with backoff
+                scheduleReconnect();
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        // Attach message handler
+        attachMessageHandler(sock);
+
+    } catch (err) {
+        console.error(`[${getCurrentTime()}][ERROR] Failed to create WhatsApp socket:`, err.message);
+        scheduleReconnect();
+    }
+}
+
+function scheduleReconnect() {
+    clearReconnectTimer();
+
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.log(`[${getCurrentTime()}][FATAL] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
+        return;
+    }
+
+    const delay = getBackoffDelay(reconnectAttempts);
+    reconnectAttempts++;
+
+    console.log(`[${getCurrentTime()}][INFO] Reconnecting in ${(delay / 1000).toFixed(1)}s... (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+
+    reconnectTimer = setTimeout(async () => {
+        console.log(`[${getCurrentTime()}][INFO] Attempting reconnection...`);
+        await connectWhatsApp();
+    }, delay);
+}
+
+// ─── MESSAGE HANDLER ───
+function attachMessageHandler(socket) {
+    // Load whitelisted groups from config.json
+    const fileConfig = fs.readFileSync("config.json", "utf8");
+    const obj = JSON.parse(fileConfig);
+    if (!obj.whitelistedGroups) obj.whitelistedGroups = [];
+    const whitelistedGroups = obj.whitelistedGroups;
+
+    socket.ev.on('messages.upsert', async ({ messages }) => {
+        for (const msg of messages) {
+            const jid = msg.key.remoteJid;
+            const sourceId = jid;
+            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+
+            if (!text) continue;
+
+            // ─── WHITELIST CHECK ───
+            const isWhitelisted = whitelistedGroups.includes(sourceId);
+            if (!isWhitelisted) {
+                continue;
+            }
+
+            // ─── TRIGGER WORD CHECK ───
+            const found = ["buy", "sell", "gold", "xauusd"].some(word => text.toLowerCase().includes(word));
+            if (!found) continue;
+
+            console.log(`[${getCurrentTime()}][INFO] Recieved signal.`);
+
+            const fileData = fs.readFileSync("data.json", "utf8");
+            const dataObj = JSON.parse(fileData || "{}");
+            if (!dataObj.whitelistedGroups) dataObj.whitelistedGroups = {};
+            if (!dataObj.whitelistedGroups[sourceId]) {
+                dataObj.whitelistedGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
+            }
+
+            dataObj.whitelistedGroups[sourceId].numberOfSignals++;
+            fs.writeFileSync("data.json", JSON.stringify(dataObj, null, 2), "utf8");
+
+            let parsed;
+            try {
+                const raw = await AiSummary(signalSummaryPrompt + text);
+                // Clean up potential markdown fences
+                const clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+                parsed = JSON.parse(clean);
+            } catch (err) {
+                console.error(`[${getCurrentTime()}][ERROR] JSON parse failed:`, err.message);
+                continue; // Skip this message
+            }
+
+            if (!parsed.valid) {
+                continue; // Not a signal
+            }
+
+            const messageId = msg.key.id;
+
+            // ─── CHECK IF COMPLETE ───
+            if (!isCompleteSignal(parsed)) {
+                storePendingSignal(sourceId, parsed, messageId);
+                console.log(`[${getCurrentTime()}][INFO] Incomplete signal buffered for ${sourceId}. Waiting for details...`);
+                continue;
+            }
+
+            // ─── CHECK FOR PENDING SIGNAL ───
+            const pending = getPendingSignal(sourceId);
+            const isUpdate = !!pending;
+            const originalId = pending?.messageId || null;
+
+            if (isUpdate) {
+                clearPendingSignal(sourceId);
+                console.log(`[${getCurrentTime()}][INFO] Completing signal from ${originalId}`);
+            } else {
+                console.log(`[${getCurrentTime()}][INFO] New complete signal recorded.`);
+            }
+
+            const { positionType, entry, tp, sl } = parsed;
+            console.log('-'.repeat(80));
+            console.log(parsed);
+            console.log('-'.repeat(80));
+            console.log("AI Response: " + positionType + " " + entry + " " + tp + " " + sl + "\nMessage ID: " + messageId);
+            console.log('-'.repeat(80));
+
+            await sendToMT5(positionType, entry, tp, sl, messageId, isUpdate, originalId);
+        }
+    });
+}
+
+// ─── HELPER FUNCTIONS ───
+function isCompleteSignal(parsed) {
+    return parsed.valid && parsed.entry !== null && parsed.tp !== null && parsed.sl !== null;
+}
+
+function getPendingSignals() {
+    try {
+        const data = fs.readFileSync("pendingSignals.json", "utf8");
+        return JSON.parse(data || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function savePendingSignals(signals) {
+    fs.writeFileSync("pendingSignals.json", JSON.stringify(signals, null, 2), "utf8");
+}
+
+function storePendingSignal(sourceId, parsed, messageId) {
+    const pending = getPendingSignals();
+    pending[sourceId] = { ...parsed, messageId, timestamp: Date.now() };
+    savePendingSignals(pending);
+}
+
+function getPendingSignal(sourceId) {
+    const pending = getPendingSignals();
+    const signal = pending[sourceId];
+
+    if (!signal) return null;
+    if (Date.now() - signal.timestamp > 10 * 60 * 1000) {
+        delete pending[sourceId];
+        savePendingSignals(pending);
         return null;
     }
+
+    return signal;
 }
 
-function formatTelegramSignal(msgText, msgDate, aiResponse, msgChatTitle) {
-    let response;
-    if (aiResponse != null)
-        response = `\n\n💡 Summary:\n${aiResponse}`;
-    else
-        response = "";
-    return `From: ` + msgChatTitle + `\n\n` + msgText + `\`` + response + `\``;
+function clearPendingSignal(sourceId) {
+    const pending = getPendingSignals();
+    delete pending[sourceId];
+    savePendingSignals(pending);
 }
+
+// ─── UPDATED SEND TO MT5 ───
+async function sendToMT5(type, bid, tp, sl, messageId, isUpdate, originalMessageId) {
+    const action = isUpdate ? "UpdatePosition" : "OpenPosition";
+    if (pipeSocket && !pipeSocket.destroyed) {
+        const message = JSON.stringify({
+            action,
+            type,
+            bid,
+            tp,
+            sl,
+            positionId: isUpdate ? originalMessageId : messageId,
+            updateId: isUpdate ? messageId : null,
+            timestamp: Date.now()
+        }) + '\n';
+        pipeSocket.write(message, (err) => {
+            if (err) console.error(`[${getCurrentTime()}][ERROR] Pipe write error:`, err);
+            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5`);
+        });
+    } else {
+        console.log(`[${getCurrentTime()}][WARN] MT5 not connected`);
+    }
+}
+
+// ─── MAIN ENTRY ───
+(async () => {
+    ensureDataExists();
+    ensureConfigExists();
+    createPipeServer();
+
+    console.log('🚀 Listener started. Waiting for QR code...');
+    await connectWhatsApp();
+})();
 
 function getCurrentTime(date = new Date()) {
     const dd = String(date.getDate()).padStart(2, '0');
-    const mm = String(date.getMonth() + 1).padStart(2, '0'); // Months are 0-based
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
     const yyyy = date.getFullYear();
-
     let hours = date.getHours();
     const minutes = String(date.getMinutes()).padStart(2, '0');
     const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12; // Convert 0 to 12 for 12-hour format
+    hours = hours % 12 || 12;
     const hh = String(hours).padStart(2, '0');
-
     return `${dd}-${mm}-${yyyy} ${hh}:${minutes} ${ampm}`;
+}
+
+// Add this function to manage signal timestamps
+function getSignalTimestamps() {
+    try {
+        const data = fs.readFileSync("signalTimestamps.json", "utf8");
+        return JSON.parse(data || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function saveSignalTimestamps(timestamps) {
+    fs.writeFileSync("signalTimestamps.json", JSON.stringify(timestamps, null, 2), "utf8");
+}
+
+function isSignalUpdate(sourceId) {
+    const timestamps = getSignalTimestamps();
+    const lastSignalTime = timestamps[sourceId];
+
+    if (!lastSignalTime) return false;
+
+    const timeDiff = Date.now() - lastSignalTime;
+    const tenMinutes = 10 * 60 * 1000;
+
+    return timeDiff < tenMinutes;
+}
+
+function recordSignalTime(sourceId) {
+    const timestamps = getSignalTimestamps();
+    timestamps[sourceId] = Date.now();
+    saveSignalTimestamps(timestamps);
 }
