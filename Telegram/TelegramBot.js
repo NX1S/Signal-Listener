@@ -13,8 +13,7 @@ const apiIdSelfBot = parseInt(process.env.API_ID);
 const apiHashSelfBot = process.env.API_HASH;
 const stringSessionSelfBot = new StringSession(process.env.STRING_SESSION);
 const botToken = process.env.BOT_TOKEN;
-const targetGroupId = parseInt(process.env.TARGET_GROUP_ID);
-const signalDestination = [-1003150924994, -4911865260];
+const targetGroupId = [-4911865260];
 
 const signalSummaryPrompt = `You are a trading signal formatter.  Take the following trading signal message and extract the key values into the following format:
 
@@ -69,8 +68,8 @@ async function AiSummary(prompt) {
     console.log(`[${getCurrentTime()}][INFO] Listener connected to Telegram with @${self.username}!`);
     //Selfbot
 
-    await client.start({ botAuthToken: botToken });
-    console.log(`[${getCurrentTime()}][INFO] Signaler Bot is on!`);
+    //await client.start({ botAuthToken: botToken });
+    //console.log(`[${getCurrentTime()}][INFO] Signaler Bot is on!`);
     //Bot
 
     const sourceHandler = async (event) => {
@@ -163,17 +162,7 @@ async function filterChannelMessages(msg, sourceId) {
     const found = keywords.some(word => msg.message.toLowerCase().includes(word.toLowerCase()));
 
     if (found) {
-        const vipSources = ["2473656171", "2266717234", "4923847295", "2948171548"];
-
-        if (aiChecking.trim().toLowerCase() === "true") {
-            if (vipSources.includes(sourceId.toString())) {
-                console.log(`[${getCurrentTime()}][INFO] VIP Signal detected!`)
-                return "⚠️⚠️⚠️VIP SIGNAL⚠️⚠️⚠️\n\n" + msg.message + "\n\n⚠️⚠️⚠️VIP SIGNAL⚠️⚠️⚠️";
-            }
-            else
-                return msg.message;
-        } else
-            console.console.error("AI Checking Failed.");
+        return msg.message;
     } else {
         return null;
     }

@@ -1,6 +1,6 @@
-import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions/index.js";
-import dotenv from "dotenv";
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const dotenv = require("dotenv");
 
 dotenv.config(); // Load .env variables
 

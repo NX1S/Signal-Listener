@@ -1,21 +1,16 @@
-import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions/index.js";
-import input from "input"; // npm install input
-import dotenv from "dotenv";
-import fs from "fs";
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import path from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions/index.js");
+const input = require("input"); // npm install input
+const dotenv = require("dotenv");
+const fs = require("fs");
+const path = require("path");
 
 dotenv.config(); // Load .env variables
 
 const apiId = parseInt(process.env.API_ID);
 const apiHash = process.env.API_HASH;
 
-const envPath = path.join(__dirname, '.env');
+const envPath = path.join(path.join(__dirname, '..'), '.env');
 let envContent = fs.readFileSync(envPath, 'utf-8');
 
 // empty session for first login
