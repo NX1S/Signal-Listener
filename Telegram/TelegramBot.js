@@ -68,8 +68,8 @@ async function AiSummary(prompt) {
     console.log(`[${getCurrentTime()}][INFO] Listener connected to Telegram with @${self.username}!`);
     //Selfbot
 
-    //await client.start({ botAuthToken: botToken });
-    //console.log(`[${getCurrentTime()}][INFO] Signaler Bot is on!`);
+    await client.start({ botAuthToken: botToken });
+    console.log(`[${getCurrentTime()}][INFO] Signaler Bot is on!`);
     //Bot
 
     const sourceHandler = async (event) => {
