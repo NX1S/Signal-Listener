@@ -20,6 +20,10 @@ let reconnectTimer = null;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
 const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
+const CONFIG_FILE = "./config.json"; // config file location
+const DATA_FILE = "./data.json"; // data file location
+const SIGNAL_TIMESTAMP_FILE = "../signalTimestamps.json"; // whatever this thing is
+
 
 const signalSummaryPrompt = `You are a trading signal formatter. Extract the following from the message and return ONLY a JSON object, no explanations or thoughts:
 
@@ -95,14 +99,14 @@ function createPipeServer() {
 // ─── CONFIG HELPER ───
 function ensureConfigExists() {
     const defaultConfig = {
-        whitelistedGroups: [],
+        waGroups: [],
         destinations: []
     };
 
     try {
-        fs.accessSync("config.json", fs.constants.F_OK);
+        fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
     } catch {
-        fs.writeFileSync("config.json", JSON.stringify(defaultConfig, null, 2), "utf8");
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2), "utf8");
         console.log(`[${getCurrentTime()}][INFO] Created default config.json`);
     }
 }
@@ -110,9 +114,9 @@ function ensureConfigExists() {
 // ─── DATA.JSON HELPER ───
 function ensureDataExists() {
     try {
-        fs.accessSync("data.json", fs.constants.F_OK);
+        fs.accessSync(DATA_FILE, fs.constants.F_OK);
     } catch {
-        fs.writeFileSync("data.json", "{}", "utf8");
+        fs.writeFileSync(DATA_FILE, "{}", "utf8");
     }
 }
 
@@ -232,10 +236,10 @@ function scheduleReconnect() {
 // ─── MESSAGE HANDLER ───
 function attachMessageHandler(socket) {
     // Load whitelisted groups from config.json
-    const fileConfig = fs.readFileSync("config.json", "utf8");
+    const fileConfig = fs.readFileSync(CONFIG_FILE, "utf8");
     const obj = JSON.parse(fileConfig);
-    if (!obj.whitelistedGroups) obj.whitelistedGroups = [];
-    const whitelistedGroups = obj.whitelistedGroups;
+    if (!obj.waGroups) obj.waGroups = [];
+    const whitelistedGroups = obj.waGroups;
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
@@ -257,15 +261,15 @@ function attachMessageHandler(socket) {
 
             console.log(`[${getCurrentTime()}][INFO] Recieved signal.`);
 
-            const fileData = fs.readFileSync("data.json", "utf8");
+            const fileData = fs.readFileSync(DATA_FILE, "utf8");
             const dataObj = JSON.parse(fileData || "{}");
-            if (!dataObj.whitelistedGroups) dataObj.whitelistedGroups = {};
-            if (!dataObj.whitelistedGroups[sourceId]) {
-                dataObj.whitelistedGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
+            if (!dataObj.waGroups) dataObj.waGroups = {};
+            if (!dataObj.waGroups[sourceId]) {
+                dataObj.waGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
             }
 
-            dataObj.whitelistedGroups[sourceId].numberOfSignals++;
-            fs.writeFileSync("data.json", JSON.stringify(dataObj, null, 2), "utf8");
+            dataObj.waGroups[sourceId].numberOfSignals++;
+            fs.writeFileSync(DATA_FILE, JSON.stringify(dataObj, null, 2), "utf8");
 
             let parsed;
             try {
@@ -407,7 +411,7 @@ function getCurrentTime(date = new Date()) {
 // Add this function to manage signal timestamps
 function getSignalTimestamps() {
     try {
-        const data = fs.readFileSync("signalTimestamps.json", "utf8");
+        const data = fs.readFileSync(SIGNAL_TIMESTAMP_FILE, "utf8");
         return JSON.parse(data || "{}");
     } catch {
         return {};
@@ -415,7 +419,7 @@ function getSignalTimestamps() {
 }
 
 function saveSignalTimestamps(timestamps) {
-    fs.writeFileSync("signalTimestamps.json", JSON.stringify(timestamps, null, 2), "utf8");
+    fs.writeFileSync(SIGNAL_TIMESTAMP_FILE, JSON.stringify(timestamps, null, 2), "utf8");
 }
 
 function isSignalUpdate(sourceId) {
