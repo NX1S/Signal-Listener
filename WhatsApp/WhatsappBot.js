@@ -22,25 +22,26 @@ const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
 const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 const CONFIG_FILE = "./config.json"; // config file location
 const DATA_FILE = "./data.json"; // data file location
-const SIGNAL_TIMESTAMP_FILE = "../signalTimestamps.json"; // whatever this thing is
+const POSITIONS_FILE = "./positions.json"; // open position file for each source
 
 
-const signalSummaryPrompt = `You are a trading signal formatter. Extract the following from the message and return ONLY a JSON object, no explanations or thoughts:
+const signalSummaryPrompt = `You are a trading signal formatter and  classifier. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
+- "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
+- "CLOSE": An instruction to close an open trade right now (e.g. "CLOSE 4050 ENTRY", "CLOSE NOW", "CLOSE ALL", "EXIT TRADE"). Any price mentioned in a CLOSE message is ONLY used to identify WHICH entry to close — it is NEVER a condition to wait for. Treat every CLOSE as an immediate, unconditional close at current market price. Put the mentioned price (if any) in "referenceEntry".
+- "IGNORE": Everything else. This includes: progress/status updates ("50+ pips running", "GOLD - TP1 HIT", "120+ pips running", "70+ Pips Profit Running"), hold confirmations ("STAY 4048 HOLDING"), and any non-trade chatter. "TP HIT" style messages must ALWAYS be IGNORE, never OPEN or UPDATE_TP.
 
 {
-  "valid": true,
+  "action": "OPEN" | "UPDATE" | "CLOSE" | "IGNORE",
   "positionType": "BUY" or "SELL",
   "entry": number or null,
   "tp": number or null,
-  "sl": number or null,
-  "isUpdate": true or false
+  "sl": number or "BREAKEVEN" or null
 }
 
 Rules:
-- If the message is not a trading signal, return {"valid": false}
-- positionType must be uppercase "BUY" or "SELL"
-- Use null for missing prices, never 0 or empty string
-- If price range given, use lowest for BUY, highest for SELL
+- positionType must be uppercase "BUY" or "SELL", if you cant figure out the position type, set action as "IGNORE".
+- Use null for missing prices, never 0 or empty string.
+- If price range given, set entry to the lowest for BUY, and highest for SELL.
 - When multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
 - If the signal is an update to a previous signal, set isUpdate to true.
 - Return ONLY the JSON object, no markdown, no explanations
@@ -56,7 +57,6 @@ async function AiSummary(prompt) {
         contents: prompt,
         temperature: 0,
     });
-
     const textContent = response.text || "";
     return textContent || "No output";
 }
@@ -102,13 +102,34 @@ function ensureConfigExists() {
         waGroups: [],
         destinations: []
     };
-
     try {
         fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
     } catch {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2), "utf8");
         console.log(`[${getCurrentTime()}][INFO] Created default config.json`);
     }
+}
+
+// ─── POSITIONS HELPER ───
+function ensurePositionsExists() {
+    try {
+        fs.accessSync(POSITIONS_FILE, fs.constants.F_OK);
+    } catch {
+        fs.writeFileSync(POSITIONS_FILE, "{}", "utf8");
+        console.log(`[${getCurrentTime()}][INFO] Created default positions.json`);
+    }
+}
+
+function readPositions() {
+    try {
+        return JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf8") || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function writePositions(positions) {
+    fs.writeFileSync(POSITIONS_FILE, JSON.stringify(positions, null, 2), "utf8");
 }
 
 // ─── DATA.JSON HELPER ───
@@ -235,11 +256,8 @@ function scheduleReconnect() {
 
 // ─── MESSAGE HANDLER ───
 function attachMessageHandler(socket) {
-    // Load whitelisted groups from config.json
-    const fileConfig = fs.readFileSync(CONFIG_FILE, "utf8");
-    const obj = JSON.parse(fileConfig);
-    if (!obj.waGroups) obj.waGroups = [];
-    const whitelistedGroups = obj.waGroups;
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    const whitelistedGroups = config.waGroups || [];
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
@@ -250,24 +268,21 @@ function attachMessageHandler(socket) {
             if (!text) continue;
 
             // ─── WHITELIST CHECK ───
-            const isWhitelisted = whitelistedGroups.includes(sourceId);
-            if (!isWhitelisted) {
-                continue;
-            }
+            if (!whitelistedGroups.includes(sourceId)) continue;
 
             // ─── TRIGGER WORD CHECK ───
-            const found = ["buy", "sell", "gold", "xauusd"].some(word => text.toLowerCase().includes(word));
+            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "be", "exit"].some(word => text.toLowerCase().includes(word));
             if (!found) continue;
 
-            console.log(`[${getCurrentTime()}][INFO] Recieved signal.`);
+            console.log(`[${getCurrentTime()}][INFO] Received signal.`);
 
+            // Update signal count in data.json
             const fileData = fs.readFileSync(DATA_FILE, "utf8");
             const dataObj = JSON.parse(fileData || "{}");
             if (!dataObj.waGroups) dataObj.waGroups = {};
             if (!dataObj.waGroups[sourceId]) {
                 dataObj.waGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
             }
-
             dataObj.waGroups[sourceId].numberOfSignals++;
             fs.writeFileSync(DATA_FILE, JSON.stringify(dataObj, null, 2), "utf8");
 
@@ -282,107 +297,132 @@ function attachMessageHandler(socket) {
                 continue; // Skip this message
             }
 
-            if (!parsed.valid) {
+            if (parsed.action === "IGNORE" || !parsed.action) {
                 continue; // Not a signal
             }
 
             const messageId = msg.key.id;
+            const positions = readPositions();
 
-            // ─── CHECK IF COMPLETE ───
-            if (!isCompleteSignal(parsed)) {
-                storePendingSignal(sourceId, parsed, messageId);
-                console.log(`[${getCurrentTime()}][INFO] Incomplete signal buffered for ${sourceId}. Waiting for details...`);
-                continue;
-            }
-
-            // ─── CHECK FOR PENDING SIGNAL ───
-            const pending = getPendingSignal(sourceId);
-            const isUpdate = !!pending;
-            const originalId = pending?.messageId || null;
-
-            if (isUpdate) {
-                clearPendingSignal(sourceId);
-                console.log(`[${getCurrentTime()}][INFO] Completing signal from ${originalId}`);
-            } else {
-                console.log(`[${getCurrentTime()}][INFO] New complete signal recorded.`);
-            }
-
-            const { positionType, entry, tp, sl } = parsed;
             console.log('-'.repeat(80));
             console.log(parsed);
             console.log('-'.repeat(80));
-            console.log("AI Response: " + positionType + " " + entry + " " + tp + " " + sl + "\nMessage ID: " + messageId);
-            console.log('-'.repeat(80));
 
-            await sendToMT5(positionType, entry, tp, sl, messageId, isUpdate, originalId);
+            // ─── ACTION: OPEN ───
+            if (parsed.action === "OPEN") {
+                if (!isCompleteSignal(parsed)) {
+                    console.log(`[${getCurrentTime()}][WARN] Incomplete OPEN signal. Required: entry, tp, sl. Skipping.`);
+                    continue;
+                }
+
+                positions[sourceId] = {
+                    messageId: messageId,
+                    type: parsed.positionType,
+                    entry: parsed.entry,
+                    tp: parsed.tp,
+                    sl: parsed.sl
+                };
+                writePositions(positions);
+
+                console.log(`[${getCurrentTime()}][INFO] New position stored for ${sourceId}, messageId: ${messageId}`);
+                console.log(`OPEN → ${parsed.positionType} | Entry: ${parsed.entry} | TP: ${parsed.tp} | SL: ${parsed.sl}`);
+
+                await sendToMT5({
+                    action: "OpenPosition",
+                    type: parsed.positionType,
+                    bid: parsed.entry,
+                    tp: parsed.tp,
+                    sl: parsed.sl,
+                    positionId: messageId,
+                    timestamp: Date.now()
+                });
+            }
+
+            // ─── ACTION: UPDATE ───
+            else if (parsed.action === "UPDATE") {
+                const existing = positions[sourceId];
+                if (!existing) {
+                    console.log(`[${getCurrentTime()}][WARN] UPDATE received but no open position for ${sourceId}. Ignoring.`);
+                    continue;
+                }
+
+                const originalMessageId = existing.messageId;
+
+                if (parsed.tp !== null && parsed.tp !== undefined) {
+                    existing.tp = parsed.tp;
+                }
+                if (parsed.sl !== null && parsed.sl !== undefined) {
+                    existing.sl = parsed.sl;
+                }
+                if (parsed.positionType) {
+                    existing.type = parsed.positionType;
+                }
+
+                writePositions(positions);
+
+                console.log(`[${getCurrentTime()}][INFO] Position updated for ${sourceId}, originalId: ${originalMessageId}`);
+                console.log(`UPDATE → Type: ${existing.type} | Entry: ${existing.entry} | TP: ${existing.tp} | SL: ${existing.sl}`);
+
+                await sendToMT5({
+                    action: "UpdatePosition",
+                    type: existing.type,
+                    bid: existing.entry,
+                    tp: existing.tp,
+                    sl: existing.sl,
+                    positionId: originalMessageId,
+                    updateId: messageId,
+                    timestamp: Date.now()
+                });
+            }
+
+            // ─── ACTION: CLOSE ───
+            else if (parsed.action === "CLOSE") {
+                const existing = positions[sourceId];
+                if (!existing) {
+                    console.log(`[${getCurrentTime()}][WARN] CLOSE received but no open position for ${sourceId}. Ignoring.`);
+                    continue;
+                }
+
+                const originalMessageId = existing.messageId;
+
+                console.log(`[${getCurrentTime()}][INFO] Closing position for ${sourceId}, originalId: ${originalMessageId}`);
+                console.log(`CLOSE → ${existing.type} | Entry: ${existing.entry}`);
+
+                await sendToMT5({
+                    action: "ClosePosition",
+                    type: existing.type,
+                    bid: existing.entry,
+                    tp: existing.tp,
+                    sl: existing.sl,
+                    positionId: originalMessageId,
+                    timestamp: Date.now()
+                });
+
+                delete positions[sourceId];
+                writePositions(positions);
+                console.log(`[${getCurrentTime()}][INFO] Position removed from positions.json.`);
+            }
+
+            console.log('-'.repeat(80));
         }
     });
 }
 
 // ─── HELPER FUNCTIONS ───
 function isCompleteSignal(parsed) {
-    return parsed.valid && parsed.entry !== null && parsed.tp !== null && parsed.sl !== null;
+    return parsed.entry !== null && parsed.tp !== null && parsed.sl !== null;
 }
 
-function getPendingSignals() {
-    try {
-        const data = fs.readFileSync("pendingSignals.json", "utf8");
-        return JSON.parse(data || "{}");
-    } catch {
-        return {};
-    }
-}
-
-function savePendingSignals(signals) {
-    fs.writeFileSync("pendingSignals.json", JSON.stringify(signals, null, 2), "utf8");
-}
-
-function storePendingSignal(sourceId, parsed, messageId) {
-    const pending = getPendingSignals();
-    pending[sourceId] = { ...parsed, messageId, timestamp: Date.now() };
-    savePendingSignals(pending);
-}
-
-function getPendingSignal(sourceId) {
-    const pending = getPendingSignals();
-    const signal = pending[sourceId];
-
-    if (!signal) return null;
-    if (Date.now() - signal.timestamp > 10 * 60 * 1000) {
-        delete pending[sourceId];
-        savePendingSignals(pending);
-        return null;
-    }
-
-    return signal;
-}
-
-function clearPendingSignal(sourceId) {
-    const pending = getPendingSignals();
-    delete pending[sourceId];
-    savePendingSignals(pending);
-}
-
-// ─── UPDATED SEND TO MT5 ───
-async function sendToMT5(type, bid, tp, sl, messageId, isUpdate, originalMessageId) {
-    const action = isUpdate ? "UpdatePosition" : "OpenPosition";
+// ─── UNIFIED SEND TO MT5 ───
+async function sendToMT5(payload) {
     if (pipeSocket && !pipeSocket.destroyed) {
-        const message = JSON.stringify({
-            action,
-            type,
-            bid,
-            tp,
-            sl,
-            positionId: isUpdate ? originalMessageId : messageId,
-            updateId: isUpdate ? messageId : null,
-            timestamp: Date.now()
-        }) + '\n';
+        const message = JSON.stringify(payload) + '\n';
         pipeSocket.write(message, (err) => {
             if (err) console.error(`[${getCurrentTime()}][ERROR] Pipe write error:`, err);
-            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5`);
+            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5 → ${payload.action}`);
         });
     } else {
-        console.log(`[${getCurrentTime()}][WARN] MT5 not connected`);
+        console.log(`[${getCurrentTime()}][WARN] MT5 not connected. Signal dropped: ${payload.action}`);
     }
 }
 
@@ -390,6 +430,7 @@ async function sendToMT5(type, bid, tp, sl, messageId, isUpdate, originalMessage
 (async () => {
     ensureDataExists();
     ensureConfigExists();
+    ensurePositionsExists();
     createPipeServer();
 
     console.log('🚀 Listener started. Waiting for QR code...');
@@ -406,36 +447,4 @@ function getCurrentTime(date = new Date()) {
     hours = hours % 12 || 12;
     const hh = String(hours).padStart(2, '0');
     return `${dd}-${mm}-${yyyy} ${hh}:${minutes} ${ampm}`;
-}
-
-// Add this function to manage signal timestamps
-function getSignalTimestamps() {
-    try {
-        const data = fs.readFileSync(SIGNAL_TIMESTAMP_FILE, "utf8");
-        return JSON.parse(data || "{}");
-    } catch {
-        return {};
-    }
-}
-
-function saveSignalTimestamps(timestamps) {
-    fs.writeFileSync(SIGNAL_TIMESTAMP_FILE, JSON.stringify(timestamps, null, 2), "utf8");
-}
-
-function isSignalUpdate(sourceId) {
-    const timestamps = getSignalTimestamps();
-    const lastSignalTime = timestamps[sourceId];
-
-    if (!lastSignalTime) return false;
-
-    const timeDiff = Date.now() - lastSignalTime;
-    const tenMinutes = 10 * 60 * 1000;
-
-    return timeDiff < tenMinutes;
-}
-
-function recordSignalTime(sourceId) {
-    const timestamps = getSignalTimestamps();
-    timestamps[sourceId] = Date.now();
-    saveSignalTimestamps(timestamps);
 }
