@@ -28,10 +28,10 @@ const POSITIONS_FILE = "./positions.json"; // open position file for each source
 const signalSummaryPrompt = `You are a trading signal formatter and  classifier. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
 - "CLOSE": An instruction to close an open trade right now (e.g. "CLOSE 4050 ENTRY", "CLOSE NOW", "CLOSE ALL", "EXIT TRADE"). Any price mentioned in a CLOSE message is ONLY used to identify WHICH entry to close — it is NEVER a condition to wait for. Treat every CLOSE as an immediate, unconditional close at current market price. Put the mentioned price (if any) in "referenceEntry".
-- "IGNORE": Everything else. This includes: progress/status updates ("50+ pips running", "GOLD - TP1 HIT", "120+ pips running", "70+ Pips Profit Running"), hold confirmations ("STAY 4048 HOLDING"), and any non-trade chatter. "TP HIT" style messages must ALWAYS be IGNORE, never OPEN or UPDATE_TP.
+- "IGNORE": If a message does not contain an update or a new position. This includes: progress/status updates ("50+ pips running", "GOLD - TP1 HIT", "120+ pips running", "70+ Pips Profit Running"), hold confirmations ("STAY 4048 HOLDING"), and any non-trade chatter.
 
 {
-  "action": "OPEN" | "UPDATE" | "CLOSE" | "IGNORE",
+  "action": "OPEN" | "UPDATE" | "CLOSE" | "IGNORE", 
   "positionType": "BUY" or "SELL",
   "entry": number or null,
   "tp": number or null,
@@ -309,14 +309,17 @@ function attachMessageHandler(socket) {
             console.log('-'.repeat(80));
 
             // ─── ACTION: OPEN ───
+            // ─── ACTION: OPEN ───
             if (parsed.action === "OPEN") {
                 if (!isCompleteSignal(parsed)) {
                     console.log(`[${getCurrentTime()}][WARN] Incomplete OPEN signal. Required: entry, tp, sl. Skipping.`);
                     continue;
                 }
 
+                const truncatedId = messageId.substring(0, 31);
+
                 positions[sourceId] = {
-                    messageId: messageId,
+                    messageId: truncatedId,
                     type: parsed.positionType,
                     entry: parsed.entry,
                     tp: parsed.tp,
@@ -324,7 +327,7 @@ function attachMessageHandler(socket) {
                 };
                 writePositions(positions);
 
-                console.log(`[${getCurrentTime()}][INFO] New position stored for ${sourceId}, messageId: ${messageId}`);
+                console.log(`[${getCurrentTime()}][INFO] New position stored for ${sourceId}, messageId: ${truncatedId}`);
                 console.log(`OPEN → ${parsed.positionType} | Entry: ${parsed.entry} | TP: ${parsed.tp} | SL: ${parsed.sl}`);
 
                 await sendToMT5({
@@ -333,7 +336,7 @@ function attachMessageHandler(socket) {
                     bid: parsed.entry,
                     tp: parsed.tp,
                     sl: parsed.sl,
-                    positionId: messageId,
+                    positionId: truncatedId,
                     timestamp: Date.now()
                 });
             }
