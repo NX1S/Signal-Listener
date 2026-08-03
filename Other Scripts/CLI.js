@@ -25,12 +25,16 @@ function loadConfig() {
     try {
         return JSON.parse(fs.readFileSync("config.json", "utf8"));
     } catch {
-        return { whitelistedGroups: [], destinations: [] };
+        return { whitelistedGroups: [] };
     }
 }
 
 function saveConfig(config) {
-    fs.writeFileSync("config.json", JSON.stringify(config, null, 2), "utf8");
+    const nextConfig = {
+        whitelistedGroups: Array.isArray(config.whitelistedGroups) ? config.whitelistedGroups : [],
+    };
+
+    fs.writeFileSync("config.json", JSON.stringify(nextConfig, null, 2), "utf8");
 }
 
 async function listGroupsAndChannels() {

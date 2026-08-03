@@ -38,7 +38,6 @@ function loadConfig() {
     return {
       whiteListedGroups: [],
       whitelistedGroups: [],
-      destinations: [],
     };
   }
 }
@@ -51,7 +50,6 @@ function saveConfig(config) {
       : [];
 
   const nextConfig = {
-    ...config,
     whiteListedGroups: whitelist,
     whitelistedGroups: whitelist,
   };

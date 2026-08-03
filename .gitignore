@@ -5,6 +5,4 @@ Logs
 config.json
 data.json
 positions.json
-signaldata.json
 *.log
-V3.js

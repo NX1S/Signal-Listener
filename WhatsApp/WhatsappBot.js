@@ -25,7 +25,7 @@ const DATA_FILE = "./data.json"; // data file location
 const POSITIONS_FILE = "./positions.json"; // open position file for each source
 
 
-const signalSummaryPrompt = `You are a trading signal formatter and  classifier. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
+const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
 - "CLOSE": An instruction to close an open trade right now (e.g. "CLOSE 4050 ENTRY", "CLOSE NOW", "CLOSE ALL", "EXIT TRADE"). Any price mentioned in a CLOSE message is ONLY used to identify WHICH entry to close — it is NEVER a condition to wait for. Treat every CLOSE as an immediate, unconditional close at current market price. Put the mentioned price (if any) in "referenceEntry".
 - "IGNORE": If a message does not contain an update or a new position. This includes: progress/status updates ("50+ pips running", "GOLD - TP1 HIT", "120+ pips running", "70+ Pips Profit Running"), hold confirmations ("STAY 4048 HOLDING"), and any non-trade chatter.
@@ -39,6 +39,8 @@ const signalSummaryPrompt = `You are a trading signal formatter and  classifier.
 }
 
 Rules:
+- Only allow XAUUSD trades. If the message is for any other symbol, set action as "IGNORE".
+- XAUUSD is valid only when prices are between 2500 and 6000. If the signal entry, TP, or SL is below 2500 or above 6000, set action as "IGNORE".
 - positionType must be uppercase "BUY" or "SELL", if you cant figure out the position type, set action as "IGNORE".
 - Use null for missing prices, never 0 or empty string.
 - If price range given, set entry to the lowest for BUY, and highest for SELL.
@@ -354,7 +356,11 @@ function attachMessageHandler(socket) {
                     existing.tp = parsed.tp;
                 }
                 if (parsed.sl !== null && parsed.sl !== undefined) {
-                    existing.sl = parsed.sl;
+                    if (typeof parsed.sl === 'string' && parsed.sl.toUpperCase() === 'BREAKEVEN') {
+                        existing.sl = existing.entry;
+                    } else {
+                        existing.sl = parsed.sl;
+                    }
                 }
                 if (parsed.positionType) {
                     existing.type = parsed.positionType;
