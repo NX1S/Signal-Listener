@@ -73,5 +73,3 @@ Scan the QR code on first run. The bot will:
 - `positions.json` - Open positions for update detection
 
 ---
-
-**Note:** Keep API keys secure. Don't commit `.env` to version control.
