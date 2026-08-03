@@ -45,7 +45,7 @@ Rules:
 - positionType must be uppercase "BUY" or "SELL", if you cant figure out the position type, set action as "IGNORE".
 - Use null for missing prices, never 0 or empty string.
 - If price range given, set entry to the lowest for BUY, and highest for SELL.
-- When multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
+- When multiple TPs are present, choose the lower one on buy, and greater one on sell. the one closer to the enter gets to be the TP.
 - If you want to reference an entry, set it in the referenceEntry variable.
 - Return ONLY the JSON object, no markdown, no explanations
 

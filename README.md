@@ -43,7 +43,7 @@ npm install
 3. **Create `config.json`:**
    ```json
    {
-       "whitelistedGroups": ["120363000000000000@g.us"]
+         "whiteListedGroups": ["120363000000000000@g.us"]
    }
    ```
     You can add WhatsApp or TeleGram IDs here.

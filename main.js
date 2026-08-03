@@ -32,12 +32,10 @@ function loadConfig() {
     return {
       ...config,
       whiteListedGroups: whitelist,
-      whitelistedGroups: whitelist,
     };
   } catch {
     return {
       whiteListedGroups: [],
-      whitelistedGroups: [],
     };
   }
 }
@@ -45,13 +43,10 @@ function loadConfig() {
 function saveConfig(config) {
   const whitelist = Array.isArray(config.whiteListedGroups)
     ? config.whiteListedGroups
-    : Array.isArray(config.whitelistedGroups)
-      ? config.whitelistedGroups
       : [];
 
   const nextConfig = {
     whiteListedGroups: whitelist,
-    whitelistedGroups: whitelist,
   };
 
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf8');
@@ -60,10 +55,6 @@ function saveConfig(config) {
 function getWhitelist(config) {
   if (Array.isArray(config.whiteListedGroups)) {
     return config.whiteListedGroups;
-  }
-
-  if (Array.isArray(config.whitelistedGroups)) {
-    return config.whitelistedGroups;
   }
 
   return [];
