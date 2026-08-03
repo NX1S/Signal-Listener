@@ -2,8 +2,10 @@
   "name": "2026",
   "version": "1.0.0",
   "description": "",
-  "main": "AutoStringSession.js",
+  "main": "main.js",
   "scripts": {
+    "start": "node main.js",
+    "cli": "node main.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

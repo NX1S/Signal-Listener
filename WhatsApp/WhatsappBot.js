@@ -99,8 +99,7 @@ function createPipeServer() {
 // ─── CONFIG HELPER ───
 function ensureConfigExists() {
     const defaultConfig = {
-        waGroups: [],
-        destinations: []
+        whiteListedGroups: []
     };
     try {
         fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
@@ -257,7 +256,7 @@ function scheduleReconnect() {
 // ─── MESSAGE HANDLER ───
 function attachMessageHandler(socket) {
     const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-    const whitelistedGroups = config.waGroups || [];
+    const whitelistedGroups = config.whiteListedGroups || [];
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
@@ -279,11 +278,11 @@ function attachMessageHandler(socket) {
             // Update signal count in data.json
             const fileData = fs.readFileSync(DATA_FILE, "utf8");
             const dataObj = JSON.parse(fileData || "{}");
-            if (!dataObj.waGroups) dataObj.waGroups = {};
-            if (!dataObj.waGroups[sourceId]) {
-                dataObj.waGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
+            if (!dataObj.whiteListedGroups) dataObj.whiteListedGroups = {};
+            if (!dataObj.whiteListedGroups[sourceId]) {
+                dataObj.whiteListedGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
             }
-            dataObj.waGroups[sourceId].numberOfSignals++;
+            dataObj.whiteListedGroups[sourceId].numberOfSignals++;
             fs.writeFileSync(DATA_FILE, JSON.stringify(dataObj, null, 2), "utf8");
 
             let parsed;

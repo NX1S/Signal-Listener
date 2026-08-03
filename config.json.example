@@ -1,4 +1,3 @@
 {
-  "whitelistedGroups": ["123456789@g.us", "0000000000@g.us"],
-  "destinations": []
+  "whiteListedGroups": ["123456789@g.us", "0000000000@g.us"]
 }
