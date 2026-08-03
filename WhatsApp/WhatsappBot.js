@@ -34,6 +34,7 @@ const signalSummaryPrompt = `You are a trading signal formatter and classifier f
   "action": "OPEN" | "UPDATE" | "CLOSE" | "IGNORE", 
   "positionType": "BUY" or "SELL",
   "entry": number or null,
+  "referenceEntry": number or null,
   "tp": number or null,
   "sl": number or "BREAKEVEN" or null
 }
@@ -45,7 +46,7 @@ Rules:
 - Use null for missing prices, never 0 or empty string.
 - If price range given, set entry to the lowest for BUY, and highest for SELL.
 - When multiple TPs are present, choose the lowest one on buy, and biggest one on sell.
-- If the signal is an update to a previous signal, set isUpdate to true.
+- If you want to reference an entry, set it in the referenceEntry variable.
 - Return ONLY the JSON object, no markdown, no explanations
 
 Message to analyze:
@@ -389,6 +390,19 @@ function attachMessageHandler(socket) {
                 if (!existing) {
                     console.log(`[${getCurrentTime()}][WARN] CLOSE received but no open position for ${sourceId}. Ignoring.`);
                     continue;
+                }
+
+                const hasReferenceEntry = parsed.referenceEntry !== null && parsed.referenceEntry !== undefined && parsed.referenceEntry !== "";
+                const hasStoredEntry = existing.entry !== null && existing.entry !== undefined && existing.entry !== "";
+
+                if (hasReferenceEntry && hasStoredEntry) {
+                    const referenceEntry = Number(parsed.referenceEntry);
+                    const storedEntry = Number(existing.entry);
+
+                    if (!Number.isFinite(referenceEntry) || !Number.isFinite(storedEntry) || referenceEntry !== storedEntry) {
+                        console.log(`[${getCurrentTime()}][WARN] CLOSE reference entry ${parsed.referenceEntry} did not match stored entry ${existing.entry} for ${sourceId}. Ignoring.`);
+                        continue;
+                    }
                 }
 
                 const originalMessageId = existing.messageId;
