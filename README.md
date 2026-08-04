@@ -50,9 +50,9 @@ npm install
 
 ## Usage
 
-Start the listener:
+Start the program:
 ```bash
-node main.js
+npm start
 ```
 
 Scan the QR code on first run. The bot will:

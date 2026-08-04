@@ -17,6 +17,8 @@ string   messageBuffer = "";
 string   trackedPositionComments[];
 bool     trackedPositionKnown[];
 datetime lastPositionScan = 0;
+string   pendingOpenPositionIds[];
+string   pendingOpenSourceIds[];
 
 //+------------------------------------------------------------------+
 void OnStart()
@@ -119,6 +121,7 @@ void WatchTrackedPositions()
    lastPositionScan = now;
 
    RefreshTrackedPositions();
+  CheckPendingOpenPositions();
 
    int trackedCount = ArraySize(trackedPositionComments);
    for(int i = 0; i < trackedCount; i++)
@@ -136,6 +139,62 @@ void WatchTrackedPositions()
   }
 
 //+------------------------------------------------------------------+
+void AddPendingOpen(string positionId, string sourceId)
+  {
+   if(positionId == "")
+      return;
+
+   int total = ArraySize(pendingOpenPositionIds);
+   for(int i = 0; i < total; i++)
+     {
+      if(pendingOpenPositionIds[i] == positionId)
+        {
+         pendingOpenSourceIds[i] = sourceId;
+         return;
+        }
+     }
+
+   int nextSize = total + 1;
+   ArrayResize(pendingOpenPositionIds, nextSize);
+   ArrayResize(pendingOpenSourceIds, nextSize);
+   pendingOpenPositionIds[nextSize - 1] = positionId;
+   pendingOpenSourceIds[nextSize - 1] = sourceId;
+  }
+
+//+------------------------------------------------------------------+
+void RemovePendingOpenIndex(int index)
+  {
+   int total = ArraySize(pendingOpenPositionIds);
+   if(index < 0 || index >= total)
+      return;
+
+   for(int i = index; i < total - 1; i++)
+     {
+      pendingOpenPositionIds[i] = pendingOpenPositionIds[i + 1];
+      pendingOpenSourceIds[i] = pendingOpenSourceIds[i + 1];
+     }
+
+   ArrayResize(pendingOpenPositionIds, total - 1);
+   ArrayResize(pendingOpenSourceIds, total - 1);
+  }
+
+//+------------------------------------------------------------------+
+void CheckPendingOpenPositions()
+  {
+   int total = ArraySize(pendingOpenPositionIds);
+   for(int i = total - 1; i >= 0; i--)
+     {
+      string positionId = pendingOpenPositionIds[i];
+      if(PositionExistsByComment(positionId))
+        {
+         string sourceId = pendingOpenSourceIds[i];
+         SendOpenConfirmedNotification(positionId, sourceId);
+         RemovePendingOpenIndex(i);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 void RefreshTrackedPositions()
   {
    string currentComments[];
@@ -144,10 +203,8 @@ void RefreshTrackedPositions()
 
    for(int i = 0; i < total; i++)
      {
-      if(PositionSelectByIndex(i))
-         currentComments[i] = PositionGetString(POSITION_COMMENT);
-      else
-         currentComments[i] = "";
+    PositionGetTicket(i);
+    currentComments[i] = PositionGetString(POSITION_COMMENT);
      }
 
    for(int i = 0; i < total; i++)
@@ -190,12 +247,10 @@ bool PositionExistsByComment(string positionId)
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
      {
-      if(PositionSelectByIndex(i))
-        {
-         string comment = PositionGetString(POSITION_COMMENT);
-         if(comment == positionId)
-            return true;
-        }
+    PositionGetTicket(i);
+    string comment = PositionGetString(POSITION_COMMENT);
+    if(comment == positionId)
+      return true;
      }
    return false;
   }
@@ -216,12 +271,45 @@ void SendPositionClosedNotification(string positionId, string reason)
       Print("Sent close notification for ", positionId, " reason: ", reason);
   }
 
+  //+------------------------------------------------------------------+
+  void SendOpenConfirmedNotification(string positionId, string sourceId)
+    {
+    if(pipeHandle == INVALID_HANDLE)
+      return;
+
+    string payload = "{\"action\":\"OpenConfirmed\",\"positionId\":\"" + positionId + "\",\"sourceId\":\"" + sourceId + "\"}\n";
+    uchar bytes[];
+    StringToCharArray(payload, bytes, 0, WHOLE_ARRAY, CP_UTF8);
+
+    if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) < 0)
+      Print("Failed to send open confirmation for ", positionId);
+    else
+      Print("Sent open confirmation for ", positionId);
+    }
+
+  //+------------------------------------------------------------------+
+  void SendOpenRejectedNotification(string positionId, string sourceId, string reason)
+    {
+    if(pipeHandle == INVALID_HANDLE)
+      return;
+
+    string payload = "{\"action\":\"OpenRejected\",\"positionId\":\"" + positionId + "\",\"sourceId\":\"" + sourceId + "\",\"reason\":\"" + reason + "\"}\n";
+    uchar bytes[];
+    StringToCharArray(payload, bytes, 0, WHOLE_ARRAY, CP_UTF8);
+
+    if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) < 0)
+      Print("Failed to send open rejection for ", positionId);
+    else
+      Print("Sent open rejection for ", positionId, " reason: ", reason);
+    }
+
 //+------------------------------------------------------------------+
 void ProcessMessage(string message)
   {
    string action = ExtractJsonString(message, "action");
    string type = ExtractJsonString(message, "type");
    string positionId = ExtractJsonString(message, "positionId");
+  string sourceId = ExtractJsonString(message, "sourceId");
    double signalBid = ExtractJsonDouble(message, "bid");
    double tp = ExtractJsonDouble(message, "tp");
    double sl = ExtractJsonDouble(message, "sl");
@@ -238,17 +326,7 @@ void ProcessMessage(string message)
       return;
      }
 
-   double price;
-   if(signalBid > 0)
-     {
-      price = signalBid;
-     }
-   else
-     {
-      price = (orderType == ORDER_TYPE_BUY)
-              ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-              : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-     }
+   double price = signalBid;
 
    Print("Action: ", action, " | ID: [", positionId, "] | TP: ", tp, " | SL: ", sl);
 
@@ -257,9 +335,10 @@ void ProcessMessage(string message)
       if(tp <= 0 || sl <= 0)
         {
          Print("Invalid TP/SL values, skipping");
+         SendOpenRejectedNotification(positionId, sourceId, "Invalid TP/SL values");
          return;
         }
-      OpenPosition(orderType, price, tp, sl, positionId);
+      OpenPosition(orderType, price, tp, sl, positionId, sourceId);
      }
    else if(action == "UpdatePosition")
       UpdatePosition(positionId, tp, sl);
@@ -268,10 +347,16 @@ void ProcessMessage(string message)
   }
 
 //+------------------------------------------------------------------+
-void OpenPosition(ENUM_ORDER_TYPE orderType, double price, double tp, double sl, string positionId)
+void OpenPosition(ENUM_ORDER_TYPE orderType, double price, double tp, double sl, string positionId, string sourceId)
   {
    MqlTradeRequest request = {};
    MqlTradeResult result = {};
+
+   if(price <= 0)
+     {
+      Print("Invalid entry price, skipping limit order");
+      return;
+     }
 
    int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -279,6 +364,12 @@ void OpenPosition(ENUM_ORDER_TYPE orderType, double price, double tp, double sl,
 
    if(orderType == ORDER_TYPE_BUY)
      {
+      if(price >= SymbolInfoDouble(_Symbol, SYMBOL_ASK))
+        {
+         Print("INVALID: BUY LIMIT price(", price, ") must be below current Ask(", SymbolInfoDouble(_Symbol, SYMBOL_ASK), ")");
+         SendOpenRejectedNotification(positionId, sourceId, "BUY LIMIT must be below Ask");
+         return;
+        }
       if(sl >= price - minDistance)
         {
          Print("INVALID: SL(", sl, ") too close to BUY price(", price, "). Min distance: ", minDistance);
@@ -292,6 +383,12 @@ void OpenPosition(ENUM_ORDER_TYPE orderType, double price, double tp, double sl,
      }
    else
      {
+      if(price <= SymbolInfoDouble(_Symbol, SYMBOL_BID))
+        {
+         Print("INVALID: SELL LIMIT price(", price, ") must be above current Bid(", SymbolInfoDouble(_Symbol, SYMBOL_BID), ")");
+         SendOpenRejectedNotification(positionId, sourceId, "SELL LIMIT must be above Bid");
+         return;
+        }
       if(sl <= price + minDistance)
         {
          Print("INVALID: SL(", sl, ") too close to SELL price(", price, "). Min distance: ", minDistance);
@@ -304,27 +401,34 @@ void OpenPosition(ENUM_ORDER_TYPE orderType, double price, double tp, double sl,
         }
      }
 
-   request.action = TRADE_ACTION_DEAL;
+  request.action = TRADE_ACTION_PENDING;
    request.symbol = _Symbol;
    request.volume = LotSize;
-   request.type = orderType;
+  request.type = (orderType == ORDER_TYPE_BUY) ? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
    request.price = price;
    request.sl = sl;
    request.tp = tp;
-   request.deviation = (int)Slippage;
    request.comment = positionId;
    request.type_filling = GetFillingMode();
+  request.type_time = ORDER_TIME_GTC;
 
    if(!OrderSend(request, result))
      {
       Print("OrderSend failed: ", result.retcode);
+      SendOpenRejectedNotification(positionId, sourceId, "OrderSend failed");
       return;
      }
 
    if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
+     {
       Print("SUCCESS! Ticket: ", result.order);
+      AddPendingOpen(positionId, sourceId);
+     }
    else
+     {
       Print("Failed. Retcode: ", result.retcode);
+      SendOpenRejectedNotification(positionId, sourceId, "Retcode " + IntegerToString((int)result.retcode));
+     }
   }
 
 //+------------------------------------------------------------------+

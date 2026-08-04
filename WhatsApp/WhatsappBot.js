@@ -24,6 +24,8 @@ const CONFIG_FILE = "./config.json"; // config file location
 const DATA_FILE = "./data.json"; // data file location
 const POSITIONS_FILE = "./positions.json"; // open position file for each source
 
+const pendingOpenPositions = new Map();
+
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
@@ -178,7 +180,63 @@ function handlePipeMessage(rawMessage) {
 
     if (payload.action === 'PositionClosed') {
         handlePositionClosedNotification(payload);
+        return;
     }
+
+    if (payload.action === 'OpenConfirmed') {
+        handleOpenConfirmedNotification(payload);
+        return;
+    }
+
+    if (payload.action === 'OpenRejected') {
+        handleOpenRejectedNotification(payload);
+    }
+}
+
+function handleOpenConfirmedNotification(payload) {
+    const positionId = typeof payload.positionId === 'string' ? payload.positionId.trim() : '';
+    if (!positionId) {
+        console.log(`[${getCurrentTime()}][WARN] Ignoring open confirmation without positionId.`);
+        return;
+    }
+
+    const sourceId = typeof payload.sourceId === 'string' ? payload.sourceId.trim() : '';
+    const pending = pendingOpenPositions.get(positionId) || (sourceId ? pendingOpenPositions.get(sourceId) : null);
+
+    if (!pending) {
+        console.log(`[${getCurrentTime()}][WARN] Open confirmation received for unknown positionId: ${positionId}`);
+        return;
+    }
+
+    const positions = readPositions();
+    positions[pending.sourceId] = {
+        messageId: pending.messageId,
+        type: pending.type,
+        entry: pending.entry,
+        tp: pending.tp,
+        sl: pending.sl
+    };
+    writePositions(positions);
+    pendingOpenPositions.delete(positionId);
+    pendingOpenPositions.delete(pending.sourceId);
+
+    console.log(`[${getCurrentTime()}][INFO] Position confirmed open for ${pending.sourceId} (messageId: ${pending.messageId})`);
+}
+
+function handleOpenRejectedNotification(payload) {
+    const positionId = typeof payload.positionId === 'string' ? payload.positionId.trim() : '';
+    const sourceId = typeof payload.sourceId === 'string' ? payload.sourceId.trim() : '';
+    const pending = pendingOpenPositions.get(positionId) || (sourceId ? pendingOpenPositions.get(sourceId) : null);
+    const reason = typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : 'rejected';
+
+    if (pending) {
+        pendingOpenPositions.delete(positionId);
+        pendingOpenPositions.delete(pending.sourceId);
+        console.log(`[${getCurrentTime()}][WARN] Open request rejected for ${pending.sourceId} (messageId: ${pending.messageId}) - ${reason}`);
+        return;
+    }
+
+    console.log(`[${getCurrentTime()}][WARN] Open request rejected for unknown positionId: ${positionId} - ${reason}`);
 }
 
 function handlePositionClosedNotification(payload) {
@@ -390,16 +448,24 @@ function attachMessageHandler(socket) {
 
                 const truncatedId = messageId.substring(0, 31);
 
-                positions[sourceId] = {
+                pendingOpenPositions.set(truncatedId, {
+                    sourceId,
                     messageId: truncatedId,
                     type: parsed.positionType,
                     entry: parsed.entry,
                     tp: parsed.tp,
                     sl: parsed.sl
-                };
-                writePositions(positions);
+                });
+                pendingOpenPositions.set(sourceId, {
+                    sourceId,
+                    messageId: truncatedId,
+                    type: parsed.positionType,
+                    entry: parsed.entry,
+                    tp: parsed.tp,
+                    sl: parsed.sl
+                });
 
-                console.log(`[${getCurrentTime()}][INFO] New position stored for ${sourceId}, messageId: ${truncatedId}`);
+                console.log(`[${getCurrentTime()}][INFO] Open request queued for ${sourceId}, messageId: ${truncatedId}`);
                 console.log(`OPEN → ${parsed.positionType} | Entry: ${parsed.entry} | TP: ${parsed.tp} | SL: ${parsed.sl}`);
 
                 await sendToMT5({
@@ -409,6 +475,7 @@ function attachMessageHandler(socket) {
                     tp: parsed.tp,
                     sl: parsed.sl,
                     positionId: truncatedId,
+                    sourceId,
                     timestamp: Date.now()
                 });
             }
