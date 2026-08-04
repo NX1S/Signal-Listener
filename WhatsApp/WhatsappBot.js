@@ -27,7 +27,7 @@ const POSITIONS_FILE = "./positions.json"; // open position file for each source
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
-- "CLOSE": An instruction to close an open trade right now (e.g. "CLOSE 4050 ENTRY", "CLOSE NOW", "CLOSE ALL", "EXIT TRADE"). Any price mentioned in a CLOSE message is ONLY used to identify WHICH entry to close — it is NEVER a condition to wait for. Treat every CLOSE as an immediate, unconditional close at current market price. Put the mentioned price (if any) in "referenceEntry".
+- "CLOSE": An instruction to close an open trade right now (e.g. "CLOSE 4050 ENTRY", "CLOSE NOW", "CLOSE ALL", "EXIT TRADE", "SMALL ACCOUNTS CLOSE"). Any price mentioned in a CLOSE message is ONLY used to identify WHICH entry to close — it is NEVER a condition to wait for. Treat every CLOSE as an immediate, unconditional close at current market price. Put the mentioned price (if any) in "referenceEntry".
 - "IGNORE": If a message does not contain an update or a new position. This includes: progress/status updates ("50+ pips running", "GOLD - TP1 HIT", "120+ pips running", "70+ Pips Profit Running"), hold confirmations ("STAY 4048 HOLDING"), and any non-trade chatter.
 
 {
@@ -72,6 +72,21 @@ function createPipeServer() {
     pipeServer = net.createServer((socket) => {
         console.log(`[${getCurrentTime()}][INFO] MT5 connected to pipe`);
         pipeSocket = socket;
+        let inboundBuffer = '';
+
+        socket.on('data', (chunk) => {
+            inboundBuffer += chunk.toString('utf8');
+
+            let newlineIndex;
+            while ((newlineIndex = inboundBuffer.indexOf('\n')) !== -1) {
+                const line = inboundBuffer.slice(0, newlineIndex).trim();
+                inboundBuffer = inboundBuffer.slice(newlineIndex + 1);
+
+                if (line) {
+                    handlePipeMessage(line);
+                }
+            }
+        });
 
         socket.on('end', () => {
             console.log(`[${getCurrentTime()}][WARN] MT5 disconnected`);
@@ -122,6 +137,11 @@ function ensurePositionsExists() {
     }
 }
 
+function clearPositionsFile() {
+    fs.writeFileSync(POSITIONS_FILE, "{}", "utf8");
+    console.log(`[${getCurrentTime()}][INFO] Cleared positions.json for a fresh start.`);
+}
+
 function readPositions() {
     try {
         return JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf8") || "{}");
@@ -132,6 +152,56 @@ function readPositions() {
 
 function writePositions(positions) {
     fs.writeFileSync(POSITIONS_FILE, JSON.stringify(positions, null, 2), "utf8");
+}
+
+function findPositionSourceIdByMessageId(positions, messageId) {
+    const entries = Object.entries(positions);
+
+    for (const [sourceId, position] of entries) {
+        if (position && position.messageId === messageId) {
+            return sourceId;
+        }
+    }
+
+    return null;
+}
+
+function handlePipeMessage(rawMessage) {
+    let payload;
+
+    try {
+        payload = JSON.parse(rawMessage);
+    } catch (err) {
+        console.error(`[${getCurrentTime()}][ERROR] Invalid pipe JSON from MT5:`, err.message);
+        return;
+    }
+
+    if (payload.action === 'PositionClosed') {
+        handlePositionClosedNotification(payload);
+    }
+}
+
+function handlePositionClosedNotification(payload) {
+    const positionId = typeof payload.positionId === 'string' ? payload.positionId.trim() : '';
+
+    if (!positionId) {
+        console.log(`[${getCurrentTime()}][WARN] Ignoring close notification without positionId.`);
+        return;
+    }
+
+    const positions = readPositions();
+    const sourceId = findPositionSourceIdByMessageId(positions, positionId);
+
+    if (!sourceId) {
+        console.log(`[${getCurrentTime()}][INFO] Close notification received for unknown positionId: ${positionId}`);
+        return;
+    }
+
+    delete positions[sourceId];
+    writePositions(positions);
+
+    const reason = payload.reason || 'closed';
+    console.log(`[${getCurrentTime()}][INFO] Removed closed position from positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
 }
 
 // ─── DATA.JSON HELPER ───
@@ -453,6 +523,7 @@ async function sendToMT5(payload) {
     ensureDataExists();
     ensureConfigExists();
     ensurePositionsExists();
+    clearPositionsFile();
     createPipeServer();
 
     console.log('🚀 Listener started. Waiting for QR code...');

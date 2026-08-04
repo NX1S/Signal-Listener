@@ -9,10 +9,14 @@ input string PipeName = "MT5Signal";
 input double LotSize = 0.1;
 input double Slippage = 50;
 input int    PollIntervalMs = 100;
+input int    PositionWatchPollMs = 1000;
 
 string   pipePath;
 int      pipeHandle = INVALID_HANDLE;
 string   messageBuffer = "";
+string   trackedPositionComments[];
+bool     trackedPositionKnown[];
+datetime lastPositionScan = 0;
 
 //+------------------------------------------------------------------+
 void OnStart()
@@ -39,6 +43,7 @@ void OnStart()
 
    while(!IsStopped())
      {
+      WatchTrackedPositions();
       CheckPipe();
       Sleep(PollIntervalMs);
      }
@@ -102,6 +107,113 @@ void CheckPipe()
       messageBuffer = StringSubstr(messageBuffer, bufLen - 4096);
       Print("WARN: Buffer trimmed to prevent overflow");
      }
+  }
+
+//+------------------------------------------------------------------+
+void WatchTrackedPositions()
+  {
+   datetime now = TimeCurrent();
+   if(lastPositionScan != 0 && (now - lastPositionScan) * 1000 < PositionWatchPollMs)
+      return;
+
+   lastPositionScan = now;
+
+   RefreshTrackedPositions();
+
+   int trackedCount = ArraySize(trackedPositionComments);
+   for(int i = 0; i < trackedCount; i++)
+     {
+      if(!trackedPositionKnown[i])
+         continue;
+
+      string positionId = trackedPositionComments[i];
+      if(!PositionExistsByComment(positionId))
+        {
+         trackedPositionKnown[i] = false;
+         SendPositionClosedNotification(positionId, "closed");
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+void RefreshTrackedPositions()
+  {
+   string currentComments[];
+   int total = PositionsTotal();
+   ArrayResize(currentComments, total);
+
+   for(int i = 0; i < total; i++)
+     {
+      if(PositionSelectByIndex(i))
+         currentComments[i] = PositionGetString(POSITION_COMMENT);
+      else
+         currentComments[i] = "";
+     }
+
+   for(int i = 0; i < total; i++)
+     {
+      string comment = currentComments[i];
+      if(comment == "")
+         continue;
+
+      int knownIndex = FindTrackedPositionIndex(comment);
+      if(knownIndex == -1)
+        {
+         int nextSize = ArraySize(trackedPositionComments) + 1;
+         ArrayResize(trackedPositionComments, nextSize);
+         ArrayResize(trackedPositionKnown, nextSize);
+         trackedPositionComments[nextSize - 1] = comment;
+         trackedPositionKnown[nextSize - 1] = true;
+        }
+      else
+        {
+         trackedPositionKnown[knownIndex] = true;
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+int FindTrackedPositionIndex(string positionId)
+  {
+   int total = ArraySize(trackedPositionComments);
+   for(int i = 0; i < total; i++)
+     {
+      if(trackedPositionComments[i] == positionId)
+         return i;
+     }
+   return -1;
+  }
+
+//+------------------------------------------------------------------+
+bool PositionExistsByComment(string positionId)
+  {
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      if(PositionSelectByIndex(i))
+        {
+         string comment = PositionGetString(POSITION_COMMENT);
+         if(comment == positionId)
+            return true;
+        }
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+void SendPositionClosedNotification(string positionId, string reason)
+  {
+   if(pipeHandle == INVALID_HANDLE)
+      return;
+
+   string payload = "{\"action\":\"PositionClosed\",\"positionId\":\"" + positionId + "\",\"reason\":\"" + reason + "\"}\n";
+   uchar bytes[];
+   StringToCharArray(payload, bytes, 0, WHOLE_ARRAY, CP_UTF8);
+
+   if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) < 0)
+      Print("Failed to send close notification for ", positionId);
+   else
+      Print("Sent close notification for ", positionId, " reason: ", reason);
   }
 
 //+------------------------------------------------------------------+
