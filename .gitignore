@@ -4,5 +4,6 @@ Logs
 .env
 config.json
 data.json
-positions.json
+Positions.json
+namedPipesTest.js
 *.log

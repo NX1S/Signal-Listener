@@ -22,7 +22,7 @@ const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
 const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 const CONFIG_FILE = "./config.json"; // config file location
 const DATA_FILE = "./data.json"; // data file location
-const POSITIONS_FILE = "./positions.json"; // open position file for each source
+const POSITIONS_FILE = "./Positions.json"; // open position file for each source
 
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
@@ -122,7 +122,7 @@ function ensureConfigExists() {
     try {
         fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
     } catch {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2), "utf8");
+        writeJSON(CONFIG_FILE,defaultConfig);
         console.log(`[${getCurrentTime()}][INFO] Created default config.json`);
     }
 }
@@ -132,26 +132,17 @@ function ensurePositionsExists() {
     try {
         fs.accessSync(POSITIONS_FILE, fs.constants.F_OK);
     } catch {
-        fs.writeFileSync(POSITIONS_FILE, "{}", "utf8");
-        console.log(`[${getCurrentTime()}][INFO] Created default positions.json`);
+        writeJSON(POSITIONS_FILE, "{}");
+        console.log(`[${getCurrentTime()}][INFO] Created default Positions.json`);
     }
-}
-
-function clearPositionsFile() {
-    fs.writeFileSync(POSITIONS_FILE, "{}", "utf8");
-    console.log(`[${getCurrentTime()}][INFO] Cleared positions.json for a fresh start.`);
 }
 
 function readPositions() {
     try {
-        return JSON.parse(fs.readFileSync(POSITIONS_FILE, "utf8") || "{}");
+        return readJSON(POSITIONS_FILE);
     } catch {
         return {};
     }
-}
-
-function writePositions(positions) {
-    fs.writeFileSync(POSITIONS_FILE, JSON.stringify(positions, null, 2), "utf8");
 }
 
 function findPositionSourceIdByMessageId(positions, messageId) {
@@ -198,10 +189,10 @@ function handlePositionClosedNotification(payload) {
     }
 
     delete positions[sourceId];
-    writePositions(positions);
+    writeJSON(POSITIONS_FILE,positions);
 
     const reason = payload.reason || 'closed';
-    console.log(`[${getCurrentTime()}][INFO] Removed closed position from positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
+    console.log(`[${getCurrentTime()}][INFO] Removed closed position from Positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
 }
 
 // ─── DATA.JSON HELPER ───
@@ -209,7 +200,7 @@ function ensureDataExists() {
     try {
         fs.accessSync(DATA_FILE, fs.constants.F_OK);
     } catch {
-        fs.writeFileSync(DATA_FILE, "{}", "utf8");
+        writeJSON(DATA_FILE, "{}");
     }
 }
 
@@ -328,8 +319,8 @@ function scheduleReconnect() {
 
 // ─── MESSAGE HANDLER ───
 function attachMessageHandler(socket) {
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-    const whitelistedGroups = config.whiteListedGroups || [];
+    const config = readJSON(CONFIG_FILE);
+    const whiteListedGroups = config.whiteListedGroups || [];
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
@@ -338,40 +329,25 @@ function attachMessageHandler(socket) {
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
 
             if (!text) continue;
+            if (!whiteListedGroups.includes(sourceId)) continue;
 
-            // ─── WHITELIST CHECK ───
-            if (!whitelistedGroups.includes(sourceId)) continue;
-
-            // ─── TRIGGER WORD CHECK ───
             const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "be", "exit"].some(word => text.toLowerCase().includes(word));
             if (!found) continue;
 
             console.log(`[${getCurrentTime()}][INFO] Received signal.`);
 
-            // Update signal count in data.json
-            const fileData = fs.readFileSync(DATA_FILE, "utf8");
-            const dataObj = JSON.parse(fileData || "{}");
+            // Update counter
+            const dataObj = readJSON(DATA_FILE);
             if (!dataObj.whiteListedGroups) dataObj.whiteListedGroups = {};
             if (!dataObj.whiteListedGroups[sourceId]) {
                 dataObj.whiteListedGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
             }
             dataObj.whiteListedGroups[sourceId].numberOfSignals++;
-            fs.writeFileSync(DATA_FILE, JSON.stringify(dataObj, null, 2), "utf8");
+            writeJSON(DATA_FILE, dataObj);
 
-            let parsed;
-            try {
-                const raw = await AiSummary(signalSummaryPrompt + text);
-                // Clean up potential markdown fences
-                const clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
-                parsed = JSON.parse(clean);
-            } catch (err) {
-                console.error(`[${getCurrentTime()}][ERROR] JSON parse failed:`, err.message);
-                continue; // Skip this message
-            }
-
-            if (parsed.action === "IGNORE" || !parsed.action) {
-                continue; // Not a signal
-            }
+            // Parse signal (isolated logic)
+            const parsed = await parseSignalFromText(text);
+            if (!parsed || parsed.action === "IGNORE" || !parsed.action) continue;
 
             const messageId = msg.key.id;
             const positions = readPositions();
@@ -380,119 +356,21 @@ function attachMessageHandler(socket) {
             console.log(parsed);
             console.log('-'.repeat(80));
 
-            // ─── ACTION: OPEN ───
-            // ─── ACTION: OPEN ───
-            if (parsed.action === "OPEN") {
-                if (!isCompleteSignal(parsed)) {
-                    console.log(`[${getCurrentTime()}][WARN] Incomplete OPEN signal. Required: entry, tp, sl. Skipping.`);
-                    continue;
-                }
-
-                const truncatedId = messageId.substring(0, 31);
-
-                positions[sourceId] = {
-                    messageId: truncatedId,
-                    type: parsed.positionType,
-                    entry: parsed.entry,
-                    tp: parsed.tp,
-                    sl: parsed.sl
-                };
-                writePositions(positions);
-
-                console.log(`[${getCurrentTime()}][INFO] New position stored for ${sourceId}, messageId: ${truncatedId}`);
-                console.log(`OPEN → ${parsed.positionType} | Entry: ${parsed.entry} | TP: ${parsed.tp} | SL: ${parsed.sl}`);
-
+            // Handle action (isolated logic)
+            const result = await handleSignalAction(parsed, sourceId, messageId, positions);
+            if (result) {
+                writeJSON(POSITIONS_FILE, positions);
+                
+                // Send to MT5 (isolated transport)
                 await sendToMT5({
-                    action: "OpenPosition",
-                    type: parsed.positionType,
-                    bid: parsed.entry,
-                    tp: parsed.tp,
-                    sl: parsed.sl,
-                    positionId: truncatedId,
+                    action: result.action,
+                    type: result.data.type,
+                    bid: result.data.entry,
+                    tp: result.data.tp,
+                    sl: result.data.sl,
+                    positionId: result.data.messageId,
                     timestamp: Date.now()
                 });
-            }
-
-            // ─── ACTION: UPDATE ───
-            else if (parsed.action === "UPDATE") {
-                const existing = positions[sourceId];
-                if (!existing) {
-                    console.log(`[${getCurrentTime()}][WARN] UPDATE received but no open position for ${sourceId}. Ignoring.`);
-                    continue;
-                }
-
-                const originalMessageId = existing.messageId;
-
-                if (parsed.tp !== null && parsed.tp !== undefined) {
-                    existing.tp = parsed.tp;
-                }
-                if (parsed.sl !== null && parsed.sl !== undefined) {
-                    if (typeof parsed.sl === 'string' && parsed.sl.toUpperCase() === 'BREAKEVEN') {
-                        existing.sl = existing.entry;
-                    } else {
-                        existing.sl = parsed.sl;
-                    }
-                }
-                if (parsed.positionType) {
-                    existing.type = parsed.positionType;
-                }
-
-                writePositions(positions);
-
-                console.log(`[${getCurrentTime()}][INFO] Position updated for ${sourceId}, originalId: ${originalMessageId}`);
-                console.log(`UPDATE → Type: ${existing.type} | Entry: ${existing.entry} | TP: ${existing.tp} | SL: ${existing.sl}`);
-
-                await sendToMT5({
-                    action: "UpdatePosition",
-                    type: existing.type,
-                    bid: existing.entry,
-                    tp: existing.tp,
-                    sl: existing.sl,
-                    positionId: originalMessageId,
-                    updateId: messageId,
-                    timestamp: Date.now()
-                });
-            }
-
-            // ─── ACTION: CLOSE ───
-            else if (parsed.action === "CLOSE") {
-                const existing = positions[sourceId];
-                if (!existing) {
-                    console.log(`[${getCurrentTime()}][WARN] CLOSE received but no open position for ${sourceId}. Ignoring.`);
-                    continue;
-                }
-
-                const hasReferenceEntry = parsed.referenceEntry !== null && parsed.referenceEntry !== undefined && parsed.referenceEntry !== "";
-                const hasStoredEntry = existing.entry !== null && existing.entry !== undefined && existing.entry !== "";
-
-                if (hasReferenceEntry && hasStoredEntry) {
-                    const referenceEntry = Number(parsed.referenceEntry);
-                    const storedEntry = Number(existing.entry);
-
-                    if (!Number.isFinite(referenceEntry) || !Number.isFinite(storedEntry) || referenceEntry !== storedEntry) {
-                        console.log(`[${getCurrentTime()}][WARN] CLOSE reference entry ${parsed.referenceEntry} did not match stored entry ${existing.entry} for ${sourceId}. Ignoring.`);
-                        continue;
-                    }
-                }
-
-                const originalMessageId = existing.messageId;
-
-                console.log(`[${getCurrentTime()}][INFO] Closing position for ${sourceId}, originalId: ${originalMessageId}`);
-                console.log(`CLOSE → ${existing.type} | Entry: ${existing.entry}`);
-
-                await sendToMT5({
-                    action: "ClosePosition",
-                    type: existing.type,
-                    bid: existing.entry,
-                    tp: existing.tp,
-                    sl: existing.sl,
-                    positionId: originalMessageId,
-                    timestamp: Date.now()
-                });
-
-                delete positions[sourceId];
-                writePositions(positions);
-                console.log(`[${getCurrentTime()}][INFO] Position removed from positions.json.`);
             }
 
             console.log('-'.repeat(80));
@@ -500,9 +378,87 @@ function attachMessageHandler(socket) {
     });
 }
 
+// ─── SIGNAL PARSER (Domain Logic) ───
+async function parseSignalFromText(text) {
+    try {
+        const raw = await AiSummary(signalSummaryPrompt + text);
+        const clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+        return JSON.parse(clean);
+    } catch (err) {
+        console.error(`[${getCurrentTime()}][ERROR] JSON parse failed:`, err.message);
+        return null;
+    }
+}
+
+// ─── STATE MANAGER (Business Logic) ───
+async function handleSignalAction(parsed, sourceId, messageId, positions) {
+    if (parsed.action === "OPEN") {
+        return handleOpenSignal(parsed, sourceId, messageId, positions);
+    } else if (parsed.action === "UPDATE") {
+        return handleUpdateSignal(parsed, sourceId, positions);
+    } else if (parsed.action === "CLOSE") {
+        return handleCloseSignal(parsed, sourceId, positions);
+    }
+}
+
+async function handleOpenSignal(parsed, sourceId, messageId, positions) {
+    if (!isCompleteSignal(parsed)) {
+        console.log(`[${getCurrentTime()}][WARN] Incomplete OPEN signal. Required: entry, tp, sl. Skipping.`);
+        return null;
+    }
+    const truncatedId = messageId.substring(0, 31);
+    positions[sourceId] = {
+        messageId: truncatedId,
+        type: parsed.positionType,
+        entry: parsed.entry,
+        tp: parsed.tp,
+        sl: parsed.sl
+    };
+    return { action: "OpenPosition", data: positions[sourceId] };
+}
+
+async function handleUpdateSignal(parsed, sourceId, positions) {
+    const existing = positions[sourceId];
+    if (!existing) {
+        console.log(`[${getCurrentTime()}][WARN] UPDATE received but no open position for ${sourceId}. Ignoring.`);
+        return null;
+    }
+    if (parsed.tp !== null && parsed.tp !== undefined) {
+        existing.tp = parsed.tp;
+    }
+    if (parsed.sl !== null && parsed.sl !== undefined) {
+        existing.sl = typeof parsed.sl === 'string' && parsed.sl.toUpperCase() === 'BREAKEVEN' ? existing.entry : parsed.sl;
+    }
+    if (parsed.positionType) {
+        existing.type = parsed.positionType;
+    }
+    return { action: "UpdatePosition", data: existing };
+}
+
+async function handleCloseSignal(parsed, sourceId, positions) {
+    const existing = positions[sourceId];
+    if (!existing) {
+        console.log(`[${getCurrentTime()}][WARN] CLOSE received but no open position for ${sourceId}. Ignoring.`);
+        return null;
+    }
+    return { action: "ClosePosition", data: existing };
+}
+
 // ─── HELPER FUNCTIONS ───
 function isCompleteSignal(parsed) {
     return parsed.entry !== null && parsed.tp !== null && parsed.sl !== null;
+}
+
+function readJSON(filePath) {
+    try {
+        return JSON.parse(fs.readFileSync(filePath, "utf8") || "{}");
+    } catch {
+        return {};
+    }
+}
+
+function writeJSON(filePath, data) {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
 // ─── UNIFIED SEND TO MT5 ───
@@ -523,7 +479,6 @@ async function sendToMT5(payload) {
     ensureDataExists();
     ensureConfigExists();
     ensurePositionsExists();
-    clearPositionsFile();
     createPipeServer();
 
     console.log('🚀 Listener started. Waiting for QR code...');

@@ -17,6 +17,7 @@ Automated trading signal relay from WhatsApp groups and TeleGram Groups/Channels
 
 - Node.js 16+
 - Google Gemini API key
+- Trading account with AlgoTrading enabled
 - WhatsApp account or/and TeleGram account (for listening to signals)
 - Telegram Bot token
 - MetaTrader 5 with pipe listener
