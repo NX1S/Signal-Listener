@@ -6,7 +6,7 @@
 #property strict
 
 input string PipeName = "MT5Signal";
-input double LotSize = 0.1;
+input double LotSize = 0.01;
 input double Slippage = 50;
 input int    PollIntervalMs = 100;
 input int    PositionWatchPollMs = 1000;
@@ -144,7 +144,8 @@ void RefreshTrackedPositions()
 
    for(int i = 0; i < total; i++)
      {
-      if(PositionSelectByIndex(i))
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionSelectByTicket(ticket))
          currentComments[i] = PositionGetString(POSITION_COMMENT);
       else
          currentComments[i] = "";
@@ -172,7 +173,7 @@ void RefreshTrackedPositions()
      }
   }
 
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+ used in find tracked pos index
 int FindTrackedPositionIndex(string positionId)
   {
    int total = ArraySize(trackedPositionComments);
@@ -184,13 +185,14 @@ int FindTrackedPositionIndex(string positionId)
    return -1;
   }
 
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+ used in watch tracked positions for position delete.
 bool PositionExistsByComment(string positionId)
   {
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
      {
-      if(PositionSelectByIndex(i))
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionSelectByTicket(ticket))
         {
          string comment = PositionGetString(POSITION_COMMENT);
          if(comment == positionId)
@@ -210,7 +212,7 @@ void SendPositionClosedNotification(string positionId, string reason)
    uchar bytes[];
    StringToCharArray(payload, bytes, 0, WHOLE_ARRAY, CP_UTF8);
 
-   if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) < 0)
+   if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) == 0)
       Print("Failed to send close notification for ", positionId);
    else
       Print("Sent close notification for ", positionId, " reason: ", reason);
@@ -225,18 +227,19 @@ void ProcessMessage(string message)
    double signalBid = ExtractJsonDouble(message, "bid");
    double tp = ExtractJsonDouble(message, "tp");
    double sl = ExtractJsonDouble(message, "sl");
+   int orderTypeValue = (type == "BUY") ? ORDER_TYPE_BUY :
+                        (type == "SELL") ? ORDER_TYPE_SELL : -1;
 
    Print("DEBUG Full JSON: ", message);
    Print("DEBUG Extracted positionId: [", positionId, "] Length: ", StringLen(positionId));
 
-   ENUM_ORDER_TYPE orderType = (type == "BUY") ? ORDER_TYPE_BUY :
-                               (type == "SELL") ? ORDER_TYPE_SELL : -1;
-
-   if(orderType == -1 && action != "ClosePosition")
+   if(orderTypeValue == -1 && action != "ClosePosition")
      {
       Print("Unknown type: ", type);
       return;
      }
+
+   ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)orderTypeValue;
 
    double price;
    if(signalBid > 0)
@@ -339,7 +342,8 @@ void UpdatePosition(string positionId, double newTp, double newSl)
    ulong ticket = PositionGetTicket(0);
    string comment = PositionGetString(POSITION_COMMENT);
 
-   Print("UPDATE DEBUG - Looking for: [", positionId, "] Got: [", comment, "]");
+   Print("[DEBUG] Looking for: [", positionId, "]");
+   // quick check to index 0, its sometimes faster. and set up ticket and comment variables
 
    if(comment != positionId)
      {
@@ -435,7 +439,7 @@ void ClosePosition(string positionId)
    Print("SUCCESS! Closed position ", positionId, " Ticket: ", result.order);
   }
 
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+ used in process message for pipes
 double ExtractJsonDouble(string json, string key)
   {
    string search = "\"" + key + "\":";
@@ -461,7 +465,7 @@ double ExtractJsonDouble(string json, string key)
    return StringToDouble(value);
   }
 
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+ used in process message for pipes
 string ExtractJsonString(string json, string key)
   {
    string search = "\"" + key + "\":";

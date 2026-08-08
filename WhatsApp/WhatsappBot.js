@@ -64,6 +64,78 @@ async function AiSummary(prompt) {
     return textContent || "No output";
 }
 
+// ─── MAIN ENTRY ───
+(async () => {
+    ensureDataExists();
+    ensureConfigExists();
+    ensurePositionsExists();
+    createPipeServer();
+
+    console.log('🚀 Listener started. Waiting for QR code...');
+    await connectWhatsApp();
+})();
+
+// ─── MESSAGE HANDLER ───
+function attachMessageHandler(socket) {
+    const config = readJSON(CONFIG_FILE);
+    const whiteListedGroups = config.whiteListedGroups || [];
+
+    socket.ev.on('messages.upsert', async ({ messages }) => {
+        for (const msg of messages) {
+            
+            const sourceId = msg.key.remoteJid;
+            if (!whiteListedGroups.includes(sourceId)) continue;
+
+            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+            if (!text) continue;
+            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
+            if (!found) continue;
+
+            console.log(`[${getCurrentTime()}][INFO] Received signal.`);
+
+            // Update counter
+            const dataObj = readJSON(DATA_FILE);
+            if (!dataObj.whiteListedGroups) dataObj.whiteListedGroups = {};
+            if (!dataObj.whiteListedGroups[sourceId]) {
+                dataObj.whiteListedGroups[sourceId] = { sourceName: sourceId, numberOfSignals: 0, win: 0, loss: 0 };
+            }
+            dataObj.whiteListedGroups[sourceId].numberOfSignals++;
+            writeJSON(DATA_FILE, dataObj);
+
+            // Parse signal (isolated logic)
+            const parsed = await parseSignalFromText(text);
+            if (!parsed || parsed.action === "IGNORE" || !parsed.action) continue;
+
+            const messageId = msg.key.id;
+            const positions = readPositions();
+
+            console.log('-'.repeat(80));
+            console.log(parsed);
+            console.log('-'.repeat(80));
+
+            // Handle action (isolated logic)
+            const result = await handleSignalAction(parsed, sourceId, messageId, positions);
+            if (result) {
+                writeJSON(POSITIONS_FILE, positions);
+                
+                // Send to MT5 (isolated transport)
+                await sendToMT5({
+                    action: result.action,
+                    type: result.data.type,
+                    bid: result.data.entry,
+                    tp: result.data.tp,
+                    sl: result.data.sl,
+                    positionId: result.data.messageId,
+                    timestamp: Date.now()
+                });
+            }
+
+            console.log('-'.repeat(80));
+        }
+    });
+}
+
+
 function createPipeServer() {
     try {
         require('fs').unlinkSync(pipeName);
@@ -316,68 +388,6 @@ function scheduleReconnect() {
         await connectWhatsApp();
     }, delay);
 }
-
-// ─── MESSAGE HANDLER ───
-function attachMessageHandler(socket) {
-    const config = readJSON(CONFIG_FILE);
-    const whiteListedGroups = config.whiteListedGroups || [];
-
-    socket.ev.on('messages.upsert', async ({ messages }) => {
-        for (const msg of messages) {
-            const jid = msg.key.remoteJid;
-            const sourceId = jid;
-            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-
-            if (!text) continue;
-            if (!whiteListedGroups.includes(sourceId)) continue;
-
-            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "be", "exit"].some(word => text.toLowerCase().includes(word));
-            if (!found) continue;
-
-            console.log(`[${getCurrentTime()}][INFO] Received signal.`);
-
-            // Update counter
-            const dataObj = readJSON(DATA_FILE);
-            if (!dataObj.whiteListedGroups) dataObj.whiteListedGroups = {};
-            if (!dataObj.whiteListedGroups[sourceId]) {
-                dataObj.whiteListedGroups[sourceId] = { sourceName: jid, numberOfSignals: 0, win: 0, loss: 0 };
-            }
-            dataObj.whiteListedGroups[sourceId].numberOfSignals++;
-            writeJSON(DATA_FILE, dataObj);
-
-            // Parse signal (isolated logic)
-            const parsed = await parseSignalFromText(text);
-            if (!parsed || parsed.action === "IGNORE" || !parsed.action) continue;
-
-            const messageId = msg.key.id;
-            const positions = readPositions();
-
-            console.log('-'.repeat(80));
-            console.log(parsed);
-            console.log('-'.repeat(80));
-
-            // Handle action (isolated logic)
-            const result = await handleSignalAction(parsed, sourceId, messageId, positions);
-            if (result) {
-                writeJSON(POSITIONS_FILE, positions);
-                
-                // Send to MT5 (isolated transport)
-                await sendToMT5({
-                    action: result.action,
-                    type: result.data.type,
-                    bid: result.data.entry,
-                    tp: result.data.tp,
-                    sl: result.data.sl,
-                    positionId: result.data.messageId,
-                    timestamp: Date.now()
-                });
-            }
-
-            console.log('-'.repeat(80));
-        }
-    });
-}
-
 // ─── SIGNAL PARSER (Domain Logic) ───
 async function parseSignalFromText(text) {
     try {
@@ -473,17 +483,6 @@ async function sendToMT5(payload) {
         console.log(`[${getCurrentTime()}][WARN] MT5 not connected. Signal dropped: ${payload.action}`);
     }
 }
-
-// ─── MAIN ENTRY ───
-(async () => {
-    ensureDataExists();
-    ensureConfigExists();
-    ensurePositionsExists();
-    createPipeServer();
-
-    console.log('🚀 Listener started. Waiting for QR code...');
-    await connectWhatsApp();
-})();
 
 function getCurrentTime(date = new Date()) {
     const dd = String(date.getDate()).padStart(2, '0');
