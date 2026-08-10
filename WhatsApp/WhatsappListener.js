@@ -8,6 +8,9 @@ const Logic = require('../Logic.js');
 let sock = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
+const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 const CONFIG_FILE = "./config.json"; // config file location
 
 // ─── MAIN ENTRY ───
