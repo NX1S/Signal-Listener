@@ -31,7 +31,8 @@ npm install
 
 1. **Create `.env`:**
    ```
-   GOOGLE_AI_KEY_RATING=your_gemini_api_key_here
+   GOOGLE_AI_KEY="AI KEY HERE"
+   GOOGLE_AI_KEY_BACKUP="BACKUP AI KEY HERE"
    ```
 
 2. **Get your WhatsApp group IDs:**
