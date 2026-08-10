@@ -21,7 +21,6 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
 const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
 const CONFIG_FILE = "./config.json"; // config file location
-const DATA_FILE = "./data.json"; // data file location
 const POSITIONS_FILE = "./Positions.json"; // open position file for each source
 
 
@@ -66,7 +65,6 @@ async function AiSummary(prompt) {
 
 // ─── MAIN ENTRY ───
 (async () => {
-    ensureDataExists();
     ensureConfigExists();
     ensurePositionsExists();
     createPipeServer();
@@ -78,13 +76,13 @@ async function AiSummary(prompt) {
 // ─── MESSAGE HANDLER ───
 function attachMessageHandler(socket) {
     const config = readJSON(CONFIG_FILE);
-    const whiteListedGroups = config.whiteListedGroups || [];
+    const whiteListedGroupsSources = config.whiteListedGroups || [];
 
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
             
             const sourceId = msg.key.remoteJid;
-            if (!whiteListedGroups.includes(sourceId)) continue;
+            if (!whiteListedGroupsSources.includes(sourceId)) continue;
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             if (!text) continue;
@@ -92,15 +90,6 @@ function attachMessageHandler(socket) {
             if (!found) continue;
 
             console.log(`[${getCurrentTime()}][INFO] Received signal.`);
-
-            // Update counter
-            const dataObj = readJSON(DATA_FILE);
-            if (!dataObj.whiteListedGroups) dataObj.whiteListedGroups = {};
-            if (!dataObj.whiteListedGroups[sourceId]) {
-                dataObj.whiteListedGroups[sourceId] = { sourceName: sourceId, numberOfSignals: 0, win: 0, loss: 0 };
-            }
-            dataObj.whiteListedGroups[sourceId].numberOfSignals++;
-            writeJSON(DATA_FILE, dataObj);
 
             // Parse signal (isolated logic)
             const parsed = await parseSignalFromText(text);
@@ -265,15 +254,6 @@ function handlePositionClosedNotification(payload) {
 
     const reason = payload.reason || 'closed';
     console.log(`[${getCurrentTime()}][INFO] Removed closed position from Positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
-}
-
-// ─── DATA.JSON HELPER ───
-function ensureDataExists() {
-    try {
-        fs.accessSync(DATA_FILE, fs.constants.F_OK);
-    } catch {
-        writeJSON(DATA_FILE, "{}");
-    }
 }
 
 // ─── CREDENTIAL CLEANUP HELPER ───
