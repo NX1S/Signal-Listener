@@ -35,22 +35,30 @@ npm install
    GOOGLE_AI_KEY_BACKUP="BACKUP AI KEY HERE"
    ```
 
-2. **Get your WhatsApp group IDs:**
-   ```bash
-   node WhatsApp/GroupLister.js
-   ```
-   Scan the QR code, then copy the group IDs from the output.
+2. **Get your WhatsApp/Telegram source IDs:**
 
-3. **Create `config.json`:**
+   - Check Usage section how to run the code
+   - Choose which platform
+   - Select list sources
+   - Navigate over to prefered source
+
+3. **Add source ID to WhiteList:**
+
+   - Run the code
+   - Choose option 3
+   - Select the add option
+   - Paste the ID
+
+4. **Manually edit `config.json`:**
    ```json
    {
-   "whiteListedGroups" : {
-      "Whatsapp":["123456789@g.us", "0000000000@g.us"],
-      "Telegram":["-1234567891","-1001234567891"]
-   }
+      "whiteListedGroups" : {
+         "Whatsapp":["123456789@g.us", "0000000000@g.us"],
+         "Telegram":["-1234567891","-1001234567891"]
+      }
    }
    ```
-    You can add WhatsApp and TeleGram IDs here.
+    You can add and remove WhatsApp and TeleGram IDs manually here.
 
 ## Usage
 
