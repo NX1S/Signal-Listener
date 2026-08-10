@@ -1,8 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
 const dotenv = require('dotenv');
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
@@ -15,12 +12,6 @@ let pipeSocket;
 
 // ─── RECONNECTION STATE ───
 let sock = null;
-let reconnectAttempts = 0;
-let reconnectTimer = null;
-const MAX_RECONNECT_ATTEMPTS = 10;
-const BASE_RECONNECT_DELAY_MS = 3000; // 3 seconds base
-const MAX_RECONNECT_DELAY_MS = 60000; // 60 seconds cap
-const CONFIG_FILE = "./config.json"; // config file location
 const POSITIONS_FILE = "./Positions.json"; // open position file for each source
 
 
@@ -51,10 +42,11 @@ Rules:
 Message to analyze:
 `;
 
-const geminiAIRating = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_RATING });
+const geminiAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY });
+const geminiAIBackup = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_KEY_BACKUP });
 
-async function AiSummary(prompt) {
-    const response = await geminiAIRating.models.generateContent({
+async function AiSummary(prompt, AI) {
+    const response = await AI.models.generateContent({
         model: "gemini-3.1-flash-lite",
         contents: prompt,
         temperature: 0,
@@ -65,65 +57,45 @@ async function AiSummary(prompt) {
 
 // ─── MAIN ENTRY ───
 (async () => {
-    ensureConfigExists();
     ensurePositionsExists();
     createPipeServer();
 
-    console.log('🚀 Listener started. Waiting for QR code...');
-    await connectWhatsApp();
+    console.log('🚀 Logic handler started.');
 })();
 
-// ─── MESSAGE HANDLER ───
-function attachMessageHandler(socket) {
-    const config = readJSON(CONFIG_FILE);
-    const whiteListedGroupsSources = config.whiteListedGroups || [];
+async function AnalyzeMessage(text, sourceId, messageId) {
+    // Parse signal
+    const parsed = await parseSignalFromText(text);
+    if (!parsed || parsed.action === "IGNORE" || !parsed.action) {
+        console.log(`[${getCurrentTime()}][INFO] Ignored.`);
+        return;
+    }
 
-    socket.ev.on('messages.upsert', async ({ messages }) => {
-        for (const msg of messages) {
-            
-            const sourceId = msg.key.remoteJid;
-            if (!whiteListedGroupsSources.includes(sourceId)) continue;
+    const positions = readPositions();
 
-            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-            if (!text) continue;
-            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
-            if (!found) continue;
+    console.log('-'.repeat(80));
+    console.log(parsed);
+    console.log('-'.repeat(80));
 
-            console.log(`[${getCurrentTime()}][INFO] Received signal.`);
+    // Handle action (isolated logic)
+    const result = await handleSignalAction(parsed, sourceId, messageId, positions);
+    if (result) {
+        writeJSON(POSITIONS_FILE, positions);
 
-            // Parse signal (isolated logic)
-            const parsed = await parseSignalFromText(text);
-            if (!parsed || parsed.action === "IGNORE" || !parsed.action) continue;
+        // Send to MT5 (isolated transport)
+        await sendToMT5({
+            action: result.action,
+            type: result.data.type,
+            bid: result.data.entry,
+            tp: result.data.tp,
+            sl: result.data.sl,
+            positionId: result.data.messageId,
+            timestamp: Date.now()
+        });
+    }
 
-            const messageId = msg.key.id;
-            const positions = readPositions();
-
-            console.log('-'.repeat(80));
-            console.log(parsed);
-            console.log('-'.repeat(80));
-
-            // Handle action (isolated logic)
-            const result = await handleSignalAction(parsed, sourceId, messageId, positions);
-            if (result) {
-                writeJSON(POSITIONS_FILE, positions);
-                
-                // Send to MT5 (isolated transport)
-                await sendToMT5({
-                    action: result.action,
-                    type: result.data.type,
-                    bid: result.data.entry,
-                    tp: result.data.tp,
-                    sl: result.data.sl,
-                    positionId: result.data.messageId,
-                    timestamp: Date.now()
-                });
-            }
-
-            console.log('-'.repeat(80));
-        }
-    });
+    console.log('-'.repeat(80));
 }
-
 
 function createPipeServer() {
     try {
@@ -173,19 +145,6 @@ function createPipeServer() {
         console.error(`[${getCurrentTime()}][ERROR] Pipe server error:`, err.message);
         setTimeout(createPipeServer, 5000);
     });
-}
-
-// ─── CONFIG HELPER ───
-function ensureConfigExists() {
-    const defaultConfig = {
-        whiteListedGroups: []
-    };
-    try {
-        fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
-    } catch {
-        writeJSON(CONFIG_FILE,defaultConfig);
-        console.log(`[${getCurrentTime()}][INFO] Created default config.json`);
-    }
 }
 
 // ─── POSITIONS HELPER ───
@@ -250,132 +209,31 @@ function handlePositionClosedNotification(payload) {
     }
 
     delete positions[sourceId];
-    writeJSON(POSITIONS_FILE,positions);
+    writeJSON(POSITIONS_FILE, positions);
 
     const reason = payload.reason || 'closed';
     console.log(`[${getCurrentTime()}][INFO] Removed closed position from Positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
 }
 
-// ─── CREDENTIAL CLEANUP HELPER ───
-function deleteAuthFolder() {
-    const authPath = path.resolve('auth_info_baileys');
-    try {
-        if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-            console.log(`[${getCurrentTime()}][INFO] Deleted auth_info_baileys folder`);
-            return true;
-        }
-        return false;
-    } catch (err) {
-        console.error(`[${getCurrentTime()}][ERROR] Failed to delete auth_info_baileys:`, err.message);
-        return false;
-    }
-}
-
-// ─── RECONNECTION LOGIC ───
-function getBackoffDelay(attempt) {
-    // Exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s (capped)
-    const delay = Math.min(BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt), MAX_RECONNECT_DELAY_MS);
-    return delay;
-}
-
-function clearReconnectTimer() {
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
-}
-
-async function connectWhatsApp() {
-    // Prevent multiple simultaneous connection attempts
-    clearReconnectTimer();
-
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-
-        sock = makeWASocket({
-            auth: state,
-            logger: pino({ level: 'silent' }),
-        });
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                console.log('\n📱 Scan this QR code with WhatsApp → Settings → Linked Devices:\n');
-                qrcode.generate(qr, { small: true });
-            }
-
-            if (connection === 'open') {
-                reconnectAttempts = 0;
-                const phone = sock.user?.id?.split('@')[0] || 'Unknown';
-                const name = sock.user?.name || 'Unknown';
-                console.log(`[${getCurrentTime()}][INFO] Listener connected to WhatsApp using ${phone} || ${name}`);
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-                if (!shouldReconnect) {
-                    console.log(`[${getCurrentTime()}][FATAL] Logged out. Clearing credentials...`);
-
-                    // Delete auth folder to force fresh QR on next startup
-                    deleteAuthFolder();
-
-                    console.log(`[${getCurrentTime()}][INFO] Stopped reconnecting. Restart the app to scan QR again.`);
-
-                    // Stop reconnection attempts permanently
-                    reconnectAttempts = MAX_RECONNECT_ATTEMPTS + 1;
-                    return;
-                }
-
-                // Log the disconnect reason
-                const reason = lastDisconnect?.error?.message || 'Unknown reason';
-                console.log(`[${getCurrentTime()}][WARN] WhatsApp disconnected: ${reason}`);
-
-                // Schedule reconnection with backoff
-                scheduleReconnect();
-            }
-        });
-
-        sock.ev.on('creds.update', saveCreds);
-
-        // Attach message handler
-        attachMessageHandler(sock);
-
-    } catch (err) {
-        console.error(`[${getCurrentTime()}][ERROR] Failed to create WhatsApp socket:`, err.message);
-        scheduleReconnect();
-    }
-}
-
-function scheduleReconnect() {
-    clearReconnectTimer();
-
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        console.log(`[${getCurrentTime()}][FATAL] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
-        return;
-    }
-
-    const delay = getBackoffDelay(reconnectAttempts);
-    reconnectAttempts++;
-
-    console.log(`[${getCurrentTime()}][INFO] Reconnecting in ${(delay / 1000).toFixed(1)}s... (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
-
-    reconnectTimer = setTimeout(async () => {
-        console.log(`[${getCurrentTime()}][INFO] Attempting reconnection...`);
-        await connectWhatsApp();
-    }, delay);
-}
 // ─── SIGNAL PARSER (Domain Logic) ───
 async function parseSignalFromText(text) {
     try {
-        const raw = await AiSummary(signalSummaryPrompt + text);
-        const clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+        let raw = await AiSummary(signalSummaryPrompt + text, geminiAI);
+        let clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
         return JSON.parse(clean);
     } catch (err) {
-        console.error(`[${getCurrentTime()}][ERROR] JSON parse failed:`, err.message);
+        console.error(`[${getCurrentTime()}][ERROR] AI parse failed:`, err.message);
+        if (process.env.GOOGLE_AI_KEY_BACKUP) {
+            console.log("Using backup AI.");
+            try{
+            raw = await AiSummary(signalSummaryPrompt + text, geminiAIBackup);
+            clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+            return JSON.parse(clean);
+            } catch(backupErr) {
+                console.error(`[${getCurrentTime()}][ERROR] Backup AI parse failed:`, backupErr.message);
+                return null;
+            }
+        }
         return null;
     }
 }
@@ -475,3 +333,5 @@ function getCurrentTime(date = new Date()) {
     const hh = String(hours).padStart(2, '0');
     return `${dd}-${mm}-${yyyy} ${hh}:${minutes} ${ampm}`;
 }
+
+module.exports = { AnalyzeMessage };

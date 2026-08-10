@@ -5,9 +5,9 @@ Automated trading signal relay from WhatsApp groups and TeleGram Groups/Channels
 ## Features
 
 - 📱 WhatsApp and TeleGram message monitoring
-- 🤖 AI-powered signal parsing (Google Gemini)
+- 🤖 AI-powered signal parsing (Google Gemini) with backup AI.
 - 💱 XAUUSD signal support only (BUY/SELL with entry, TP, SL)
-- 📊 Signal tracking & update detection
+- 📊 Signal tracking, update & close detection
 - 🔗 MT5 integration via named pipes
 - 🔄 Automatic reconnection with exponential backoff
 
@@ -16,11 +16,10 @@ Automated trading signal relay from WhatsApp groups and TeleGram Groups/Channels
 ### Prerequisites
 
 - Node.js 16+
-- Google Gemini API key
+- 2 Google Gemini API keys
 - Trading account with AlgoTrading enabled
-- WhatsApp account or/and TeleGram account (for listening to signals)
-- Telegram Bot token
-- MetaTrader 5 with pipe listener
+- WhatsApp account or/and TeleGram account
+- MetaTrader 5
 
 ### Installation
 
@@ -44,33 +43,36 @@ npm install
 3. **Create `config.json`:**
    ```json
    {
-         "whiteListedGroups": ["120363000000000000@g.us"]
+   "whiteListedGroups" : {
+      "Whatsapp":["123456789@g.us", "0000000000@g.us"],
+      "Telegram":["-1234567891","-1001234567891"]
+   }
    }
    ```
-    You can add WhatsApp or TeleGram IDs here.
+    You can add WhatsApp and TeleGram IDs here.
 
 ## Usage
 
 Start the listener:
 ```bash
-node main.js
+npm start
 ```
 
-Scan the QR code on first run. The bot will:
+Once logged in with your monitoring account. The bot will:
 - Monitor whitelisted IDs for signals
 - Extract XAUUSD BUY/SELL orders with entry/TP/SL
-- Send parsed signals to MT5 via named pipe
-- Track signal updates (within 10 min window)
+- Send over the signal to MT5
+- Keep monitoring for signal updates
 
 ## Files
 
 - `main.js` - CLI launcher & menu
-- `WhatsApp/WhatsappBot.js` - Main WhatsApp listener & MT5 relay
-- `WhatsApp/GroupLister.js` - Utility to list your WhatsApp groups
-- `Telegram/TelegramBot.js` - Main Telegram listener & bot relay
-- `Telegram/ListGroupsChannels.js` - Utility to list your Telegram groups and channels
+- `Logic.js` - Main script for handling incoming messages
+- `WhatsApp/WhatsappListener.js` - WhatsApp listener
+- `WhatsApp/WhatsappGroupLister.js` - Utility to list your WhatsApp groups
+- `Telegram/TelegramListener.js` - Telegram listener
+- `Telegram/TelegramGroupLister.js` - Utility to list your Telegram groups and channels
 - `config.json` - Whitelisted IDs
-- `data.json` - Signal statistics
 - `positions.json` - Open positions for update detection
 
 ---

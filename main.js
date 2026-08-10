@@ -5,10 +5,10 @@ const { spawn } = require('child_process');
 
 const ROOT = __dirname;
 const CONFIG_FILE = path.join(ROOT, 'config.json');
-const WHATSAPP_BOT_FILE = path.join(ROOT, 'WhatsApp', 'WhatsappBot.js');
-const WHATSAPP_LIST_FILE = path.join(ROOT, 'WhatsApp', 'GroupLister.js');
-const TELEGRAM_BOT_FILE = path.join(ROOT, 'Telegram', 'TelegramBot.js');
-const TELEGRAM_LIST_FILE = path.join(ROOT, 'Telegram', 'ListGroupsChannels.js');
+const WHATSAPP_BOT_FILE = path.join(ROOT, 'WhatsApp', 'WhatsappListener.js');
+const WHATSAPP_LIST_FILE = path.join(ROOT, 'WhatsApp', 'WhatsappGroupLister.js');
+const TELEGRAM_BOT_FILE = path.join(ROOT, 'Telegram', 'TelegramListener.js');
+const TELEGRAM_LIST_FILE = path.join(ROOT, 'Telegram', 'TelegramGroupLister.js');
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -22,42 +22,44 @@ function ask(question) {
 function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
-    const config = JSON.parse(raw || '{}');
-    const whitelist = Array.isArray(config.whiteListedGroups)
-      ? config.whiteListedGroups
-      : Array.isArray(config.whitelistedGroups)
-        ? config.whitelistedGroups
-        : [];
-
-    return {
-      ...config,
-      whiteListedGroups: whitelist,
-    };
+    return JSON.parse(raw || '{}');
   } catch {
     return {
-      whiteListedGroups: [],
+      whiteListedGroups: {
+        Whatsapp: [],
+        Telegram: []
+      }
     };
   }
 }
 
 function saveConfig(config) {
-  const whitelist = Array.isArray(config.whiteListedGroups)
-    ? config.whiteListedGroups
-      : [];
-
   const nextConfig = {
-    whiteListedGroups: whitelist,
+    whiteListedGroups: {
+      Whatsapp: Array.isArray(config.whiteListedGroups?.Whatsapp) ? config.whiteListedGroups.Whatsapp : [],
+      Telegram: Array.isArray(config.whiteListedGroups?.Telegram) ? config.whiteListedGroups.Telegram : []
+    }
   };
-
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf8');
 }
 
-function getWhitelist(config) {
-  if (Array.isArray(config.whiteListedGroups)) {
-    return config.whiteListedGroups;
-  }
+function getAllWhitelist(config) {
+  const groups = config.whiteListedGroups || {};
+  const result = [];
 
-  return [];
+  (groups.Whatsapp || []).forEach(id => {
+    result.push({ platform: 'Whatsapp', id });
+  });
+  (groups.Telegram || []).forEach(id => {
+    result.push({ platform: 'Telegram', id });
+  });
+
+  return result;
+}
+
+function getWhitelistByPlatform(config, platform) {
+  const groups = config.whiteListedGroups || {};
+  return Array.isArray(groups[platform]) ? groups[platform] : [];
 }
 
 function printHeader(title) {
@@ -94,18 +96,18 @@ function runNodeScript(scriptFile, systemMessage) {
 
 async function listWhitelist() {
   const config = loadConfig();
-  const whitelist = getWhitelist(config);
+  const allEntries = getAllWhitelist(config);
 
   console.clear();
   console.log('Whitelist');
   console.log('---------');
-  if (whitelist.length === 0) {
+  if (allEntries.length === 0) {
     console.log('No IDs are currently whitelisted.');
     return;
   }
 
-  whitelist.forEach((id, index) => {
-    console.log(`${index + 1}. ${id}`);
+  allEntries.forEach((entry, index) => {
+    console.log(`${index + 1}. [${entry.platform}] ${entry.id}`);
   });
 }
 
@@ -114,11 +116,14 @@ async function addWhitelistEntry() {
   console.log('Add Whitelist');
   console.log('-------------');
   console.log('');
-  console.log('Allowed IDs:');
-  console.log(' - Whatsapp Groups');
-  console.log(' - Telegram Groups');
-  console.log(' - Telegram Channels');
+  console.log('Platforms: Whatsapp, Telegram');
   console.log('Leave empty if you want to quit...');
+
+  const platform = (await ask('Enter platform: ')).trim();
+  if (!platform || !['Whatsapp', 'Telegram'].includes(platform)) {
+    console.log('Invalid platform. Use Whatsapp or Telegram.');
+    return;
+  }
 
   const id = (await ask('Enter ID to add: ')).trim();
   if (!id) {
@@ -126,18 +131,18 @@ async function addWhitelistEntry() {
   }
 
   const config = loadConfig();
-  const whitelist = getWhitelist(config);
+  const platformList = getWhitelistByPlatform(config, platform);
 
-  if (whitelist.includes(id)) {
-    console.log(`Already whitelisted: ${id}`);
+  if (platformList.includes(id)) {
+    console.log(`Already whitelisted on ${platform}: ${id}`);
     return;
   }
 
-  whitelist.push(id);
-  config.whiteListedGroups = whitelist;
-  config.whitelistedGroups = whitelist;
+  platformList.push(id);
+  config.whiteListedGroups = config.whiteListedGroups || {};
+  config.whiteListedGroups[platform] = platformList;
   saveConfig(config);
-  console.log(`Added to whitelist: ${id}`);
+  console.log(`Added to ${platform} whitelist: ${id}`);
 }
 
 async function removeWhitelistEntry() {
@@ -146,35 +151,42 @@ async function removeWhitelistEntry() {
   console.log('----------------');
 
   const config = loadConfig();
-  const whitelist = getWhitelist(config);
+  const allEntries = getAllWhitelist(config);
 
-  if (whitelist.length === 0) {
+  if (allEntries.length === 0) {
     console.log('No IDs are currently whitelisted.');
-  } else {
-    whitelist.forEach((id, index) => {
-      console.log(`${index + 1}. ${id}`);
-    });
+    return;
   }
+
+  allEntries.forEach((entry, index) => {
+    console.log(`${index + 1}. [${entry.platform}] ${entry.id}`);
+  });
 
   console.log('');
   console.log('Leave empty if you want to quit...');
+
+  const platform = (await ask('Enter platform: ')).trim();
+  if (!platform || !['Whatsapp', 'Telegram'].includes(platform)) {
+    console.log('Invalid platform.');
+    return;
+  }
 
   const id = (await ask('Enter ID to remove: ')).trim();
   if (!id) {
     return;
   }
 
-  const nextWhitelist = whitelist.filter((entry) => entry !== id);
+  const platformList = getWhitelistByPlatform(config, platform);
+  const nextList = platformList.filter((entry) => entry !== id);
 
-  if (nextWhitelist.length === whitelist.length) {
-    console.log(`ID not found in whitelist: ${id}`);
+  if (nextList.length === platformList.length) {
+    console.log(`ID not found in ${platform} whitelist: ${id}`);
     return;
   }
 
-  config.whiteListedGroups = nextWhitelist;
-  config.whitelistedGroups = nextWhitelist;
+  config.whiteListedGroups[platform] = nextList;
   saveConfig(config);
-  console.log(`Removed from whitelist: ${id}`);
+  console.log(`Removed from ${platform} whitelist: ${id}`);
 }
 
 async function whatsappMenu() {
@@ -189,7 +201,7 @@ async function whatsappMenu() {
     if (choice === '1') {
       await runNodeScript(WHATSAPP_BOT_FILE);
     } else if (choice === '2') {
-      await runNodeScript(WHATSAPP_LIST_FILE, '[SYSTEM] Triggering GroupLister.js...');
+      await runNodeScript(WHATSAPP_LIST_FILE, '[SYSTEM] Triggering WhatsappGroupLister.js...');
     } else if (choice === '3') {
       return;
     } else {
@@ -210,7 +222,7 @@ async function telegramMenu() {
     if (choice === '1') {
       await runNodeScript(TELEGRAM_BOT_FILE);
     } else if (choice === '2') {
-      await runNodeScript(TELEGRAM_LIST_FILE, '[SYSTEM] Triggering ListGroupsChannels.js...');
+      await runNodeScript(TELEGRAM_LIST_FILE, '[SYSTEM] Triggering TelegramGroupLister.js...');
     } else if (choice === '3') {
       return;
     } else {
