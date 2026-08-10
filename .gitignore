@@ -4,8 +4,8 @@ Logs
 .env
 config.json
 data.json
-Positions.json
 namedPipesTest.js
 *.log
 experimental
 tempCodeRunnerFile.js
+positions.json
