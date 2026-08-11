@@ -17,32 +17,69 @@ string   messageBuffer = "";
 string   trackedPositionComments[];
 bool     trackedPositionKnown[];
 datetime lastPositionScan = 0;
+datetime lastPipeHealthCheck = 0;
+const int    PipeHealthCheckSec = 15;
 
 //+------------------------------------------------------------------+
 void OnStart()
   {
    pipePath = "\\\\.\\pipe\\" + PipeName;
 
-   for(int i = 0; i < 10; i++)
+   int i = 1;
+   do
      {
       pipeHandle = FileOpen(pipePath, FILE_READ | FILE_WRITE | FILE_BIN | FILE_COMMON);
       if(pipeHandle != INVALID_HANDLE)
          break;
-      Print("Attempt ", i + 1, "/10 failed. Retrying...");
-      Sleep(1000);
+      int delay = MathMin(i, 10);
+      Print("Attempt ", (string)i, " failed. Retrying after ", (string)delay, " seconds...");
+      i++;
+      Sleep(delay * 1000);
      }
+   while(pipeHandle == INVALID_HANDLE);
 
    if(pipeHandle == INVALID_HANDLE)
      {
-      Print("Failed to connect to pipe. Is Node.js running?");
+      Print("Failed to connect to Listener. Is the main.js running?");
       return;
      }
 
-   Print("Connected to pipe: ", pipePath);
+   Print("Connected to Listener");
    Print("Listening for signals... (Remove script from chart to stop)");
 
    while(!IsStopped())
      {
+      // ─── Pipe health check ───
+      if(TimeCurrent() - lastPipeHealthCheck >= PipeHealthCheckSec)
+        {
+         lastPipeHealthCheck = TimeCurrent();
+
+         // Probe pipe health through existing handle
+         if(FileWriteInteger(pipeHandle, '\n', CHAR_VALUE))
+            == 0)
+           {
+            Print("Pipe health check failed — reconnecting...");
+            int i = 1;
+            do
+              {
+               pipeHandle = FileOpen(pipePath, FILE_READ | FILE_WRITE | FILE_BIN | FILE_COMMON);
+               if(pipeHandle != INVALID_HANDLE)
+                  break;
+               int delay = MathMin(i, 10);
+               Print("Reconnect attempt ", (string)i, " failed. Retrying after ", (string)delay, " seconds...");
+               i++;
+               Sleep(delay * 1000);
+              }
+            while(pipeHandle == INVALID_HANDLE);
+
+            if(pipeHandle != INVALID_HANDLE)
+               Print("Reconnected to Listener");
+            else
+               Print("Failed to reconnect to Listener.");
+           }
+        }
+      // ─────────────────────────
+
       WatchTrackedPositions();
       CheckPipe();
       Sleep(PollIntervalMs);
@@ -79,7 +116,7 @@ void CheckPipe()
    string chunk = CharArrayToString(bytes, 0, (int)read, CP_UTF8);
    messageBuffer += chunk;
 
-   // Process complete lines - look for newline delimiter
+// Process complete lines - look for newline delimiter
    int newlinePos;
    while((newlinePos = StringFind(messageBuffer, "\n")) != -1)
      {
@@ -94,18 +131,16 @@ void CheckPipe()
 
       if(StringLen(line) > 0)
         {
-         Print("Received raw: ", line);
          ProcessMessage(line);
         }
      }
-   
-   // Prevent buffer from growing indefinitely if no newline is found
-   // Keep last 4096 chars in case a partial message is at the end
+
+// Prevent buffer from growing indefinitely if no newline is found
+// Keep last 4096 chars in case a partial message is at the end
    int bufLen = StringLen(messageBuffer);
    if(bufLen > 4096)
      {
       messageBuffer = StringSubstr(messageBuffer, bufLen - 4096);
-      Print("WARN: Buffer trimmed to prevent overflow");
      }
   }
 
@@ -230,12 +265,8 @@ void ProcessMessage(string message)
    int orderTypeValue = (type == "BUY") ? ORDER_TYPE_BUY :
                         (type == "SELL") ? ORDER_TYPE_SELL : -1;
 
-   Print("DEBUG Full JSON: ", message);
-   Print("DEBUG Extracted positionId: [", positionId, "] Length: ", StringLen(positionId));
-
    if(orderTypeValue == -1 && action != "ClosePosition")
      {
-      Print("Unknown type: ", type);
       return;
      }
 
@@ -264,10 +295,12 @@ void ProcessMessage(string message)
         }
       OpenPosition(orderType, price, tp, sl, positionId);
      }
-   else if(action == "UpdatePosition")
-      UpdatePosition(positionId, tp, sl);
-   else if(action == "ClosePosition")
-      ClosePosition(positionId);
+   else
+      if(action == "UpdatePosition")
+         UpdatePosition(positionId, tp, sl);
+      else
+         if(action == "ClosePosition")
+            ClosePosition(positionId);
   }
 
 //+------------------------------------------------------------------+
@@ -335,15 +368,14 @@ void UpdatePosition(string positionId, double newTp, double newSl)
   {
    if(!PositionSelect(_Symbol))
      {
-      Print("No position found for update");
+      Print("WARN: No position found for update");
       return;
      }
 
    ulong ticket = PositionGetTicket(0);
    string comment = PositionGetString(POSITION_COMMENT);
 
-   Print("[DEBUG] Looking for: [", positionId, "]");
-   // quick check to index 0, its sometimes faster. and set up ticket and comment variables
+// quick check to index 0, its sometimes faster. and set up ticket and comment variables
 
    if(comment != positionId)
      {
@@ -362,7 +394,6 @@ void UpdatePosition(string positionId, double newTp, double newSl)
         }
       if(!found)
         {
-         Print("Position ID mismatch. Expected: [", positionId, "] Got: [", comment, "]");
          return;
         }
      }
@@ -377,7 +408,7 @@ void UpdatePosition(string positionId, double newTp, double newSl)
 
    if(!OrderSend(request, result))
      {
-      Print("UpdatePosition failed: ", result.retcode);
+      Print("ERROR: UpdatePosition failed: ", result.retcode);
       return;
      }
 
@@ -413,7 +444,6 @@ void ClosePosition(string positionId)
         }
       if(!found)
         {
-         Print("Position ID mismatch on close. Expected: [", positionId, "] Got: [", comment, "]");
          return;
         }
      }
@@ -432,7 +462,7 @@ void ClosePosition(string positionId)
 
    if(!OrderSend(request, result))
      {
-      Print("ClosePosition failed: ", result.retcode);
+      Print("ERROR: ClosePosition failed: ", result.retcode);
       return;
      }
 

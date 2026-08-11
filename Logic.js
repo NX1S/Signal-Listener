@@ -178,6 +178,7 @@ function findPositionSourceIdByMessageId(positions, messageId) {
 }
 
 function handlePipeMessage(rawMessage) {
+    if (!rawMessage || rawMessage.trim().length === 0) return;
     let payload;
 
     try {
@@ -224,7 +225,7 @@ async function parseSignalFromText(text) {
     } catch (err) {
         console.error(`[${getCurrentTime()}][ERROR] AI parse failed:`, err.message);
         if (process.env.GOOGLE_AI_KEY_BACKUP) {
-            console.log("Using backup AI.");
+            console.log(`[${getCurrentTime()}][INFO] Using backup AI.`);
             try {
                 raw = await AiSummary(signalSummaryPrompt + text, geminiAIBackup);
                 clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
