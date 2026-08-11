@@ -55,8 +55,7 @@ void OnStart()
          lastPipeHealthCheck = TimeCurrent();
 
          // Probe pipe health through existing handle
-         if(FileWriteInteger(pipeHandle, '\n', CHAR_VALUE))
-            == 0)
+         if(FileWriteInteger(pipeHandle, '\n', CHAR_VALUE) == 0)
            {
             Print("Pipe health check failed — reconnecting...");
             int i = 1;
