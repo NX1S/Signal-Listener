@@ -119,9 +119,15 @@ async function addWhitelistEntry() {
   console.log('Platforms: Whatsapp, Telegram');
   console.log('Leave empty if you want to quit...');
 
-  const platform = (await ask('Enter platform: ')).trim();
-  if (!platform || !['Whatsapp', 'Telegram'].includes(platform)) {
-    console.log('Invalid platform. Use Whatsapp or Telegram.');
+  const platformChoice = (await ask('Choose platform:\n[W] Whatsapp [T] Telegram\n> ')).trim().toUpperCase();
+
+  let platform;
+  if (platformChoice === 'W') {
+    platform = 'Whatsapp';
+  } else if (platformChoice === 'T') {
+    platform = 'Telegram';
+  } else {
+    console.log('Invalid choice.');
     return;
   }
 
@@ -165,9 +171,15 @@ async function removeWhitelistEntry() {
   console.log('');
   console.log('Leave empty if you want to quit...');
 
-  const platform = (await ask('Enter platform: ')).trim();
-  if (!platform || !['Whatsapp', 'Telegram'].includes(platform)) {
-    console.log('Invalid platform.');
+  const platformChoice = (await ask('Choose platform:\n[W] Whatsapp [T] Telegram\n> ')).trim().toUpperCase();
+
+  let platform;
+  if (platformChoice === 'W') {
+    platform = 'Whatsapp';
+  } else if (platformChoice === 'T') {
+    platform = 'Telegram';
+  } else {
+    console.log('Invalid choice.');
     return;
   }
 
