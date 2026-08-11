@@ -152,7 +152,7 @@ function ensurePositionsExists() {
     try {
         fs.accessSync(POSITIONS_FILE, fs.constants.F_OK);
     } catch {
-        writeJSON(POSITIONS_FILE, "{}");
+        writeJSON(POSITIONS_FILE, {});
         console.log(`[${getCurrentTime()}][INFO] Created default Positions.json`);
     }
 }
@@ -225,11 +225,11 @@ async function parseSignalFromText(text) {
         console.error(`[${getCurrentTime()}][ERROR] AI parse failed:`, err.message);
         if (process.env.GOOGLE_AI_KEY_BACKUP) {
             console.log("Using backup AI.");
-            try{
-            raw = await AiSummary(signalSummaryPrompt + text, geminiAIBackup);
-            clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
-            return JSON.parse(clean);
-            } catch(backupErr) {
+            try {
+                raw = await AiSummary(signalSummaryPrompt + text, geminiAIBackup);
+                clean = raw.replace(/```json?/g, '').replace(/```/g, '').trim();
+                return JSON.parse(clean);
+            } catch (backupErr) {
                 console.error(`[${getCurrentTime()}][ERROR] Backup AI parse failed:`, backupErr.message);
                 return null;
             }
@@ -240,12 +240,17 @@ async function parseSignalFromText(text) {
 
 // ─── STATE MANAGER (Business Logic) ───
 async function handleSignalAction(parsed, sourceId, messageId, positions) {
-    if (parsed.action === "OPEN") {
-        return handleOpenSignal(parsed, sourceId, messageId, positions);
-    } else if (parsed.action === "UPDATE") {
-        return handleUpdateSignal(parsed, sourceId, positions);
-    } else if (parsed.action === "CLOSE") {
-        return handleCloseSignal(parsed, sourceId, positions);
+    const action = (parsed.action || "").toString().trim().toUpperCase();
+
+    if (action === "OPEN") {
+        return await handleOpenSignal(parsed, sourceId, messageId, positions);
+    } else if (action === "UPDATE") {
+        return await handleUpdateSignal(parsed, sourceId, positions);
+    } else if (action === "CLOSE") {
+        return await handleCloseSignal(parsed, sourceId, positions);
+    } else {
+        console.log(`[${getCurrentTime()}][WARN] Unknown action: ${parsed.action}`);
+        return null;
     }
 }
 
