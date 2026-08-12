@@ -36,8 +36,10 @@ function attachMessageHandler(socket) {
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             if (!text) continue;
-            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
-            if (!found) continue;
+            const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
+            if (ignoreWordFound) continue; // auto ignore signal with certain words
+            const foundWords = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
+            if (!foundWords) continue; // words to search for
 
             console.log(`[${getCurrentTime()}][INFO] Received signal.`);
 
@@ -50,7 +52,7 @@ function attachMessageHandler(socket) {
 // ─── CONFIG HELPER ───
 function ensureConfigExists() {
     const defaultConfig = {
-        whiteListedGroups: {Whatsapp:[],Telegram:[]}
+        whiteListedGroups: { Whatsapp: [], Telegram: [] }
     };
     try {
         fs.accessSync(CONFIG_FILE, fs.constants.F_OK);

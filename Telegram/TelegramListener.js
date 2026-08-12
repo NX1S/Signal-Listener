@@ -33,7 +33,7 @@ selfClient.setLogLevel('none');
         const config = readJSON(CONFIG_FILE);
         const whiteListedGroupsSources = config.whiteListedGroups.Telegram || [];
         const msg = event.message;
-        
+
         //get the id of the signal source
         let sourceId;
         if (msg.peerId?.channelId != null) {
@@ -44,19 +44,21 @@ selfClient.setLogLevel('none');
             console.log("Recieved message from group. " + sourceId);
         } else
             sourceId = null;
-            
-            if (!whiteListedGroupsSources.includes(sourceId)) return;
-            let text = msg.text || '';
-            if (!text) return;
-            const found = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
-            if (!found) return;
-            
-            console.log(`[${getCurrentTime()}][INFO] Recieved signal.`)
-            
-            // send over to logic.js here
-            const messageId = msg.id.toString();
-            Logic.AnalyzeMessage(text, sourceId, messageId);
-        };
+
+        if (!whiteListedGroupsSources.includes(sourceId)) return;
+        let text = msg.text || '';
+        if (!text) return;
+        const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
+        if (ignoreWordFound) continue; // auto ignore signal with certain words
+        const foundWords = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
+        if (!foundWords) continue; // words to search for
+
+        console.log(`[${getCurrentTime()}][INFO] Recieved signal.`)
+
+        // send over to logic.js here
+        const messageId = msg.id.toString();
+        Logic.AnalyzeMessage(text, sourceId, messageId);
+    };
     selfClient.addEventHandler(sourceHandler, new NewMessage());
 })();
 
@@ -67,7 +69,7 @@ selfClient.setLogLevel('none');
 
 function ensureConfigExists() {
     const defaultConfig = {
-        whiteListedGroups: {Whatsapp:[],Telegram:[]}
+        whiteListedGroups: { Whatsapp: [], Telegram: [] }
     };
     try {
         fs.accessSync(CONFIG_FILE, fs.constants.F_OK);
