@@ -46,7 +46,11 @@ function attachMessageHandler(socket) {
             console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
 
             // send over to logic.js here
-            Logic.AnalyzeMessage(text, sourceId, messageId, sourceId); // replaced sourceName with sourceId.
+            try {
+                await Logic.AnalyzeMessage(text, sourceId, messageId, sourceId);
+            } catch (err) {
+                console.error(`[${getCurrentTime()}][ERROR] Message analysis failed:`, err.message);
+            } // replaced sourceName with sourceId.
         }
     });
 }

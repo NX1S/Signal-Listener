@@ -48,18 +48,62 @@ selfClient.setLogLevel('none');
         const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
         if (ignoreWordFound) return; // auto ignore signal with certain words
         const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
-        if (!foundWords) return; // words to search for
-
-        const chatTitle = msg.chat?.title || msg.chat?.username || '';
+        if (!foundWords) return; // skip if message doesnt contain trigger word
+        const chat = msg.chat || await selfClient.getEntity(msg.chatId);
+        const chatTitle = chat?.title || chat?.username || '';
         const title = " from " + chatTitle;
 
         console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
 
         // send over to logic.js here
         const messageId = msg.id.toString();
-        Logic.AnalyzeMessage(text, sourceId, messageId, chatTitle);
+        try {
+            await Logic.AnalyzeMessage(text, sourceId, messageId, chatTitle);
+        } catch (err) {
+            console.error(`[${getCurrentTime()}][ERROR] Message analysis failed:`, err.message);
+        }
     };
     selfClient.addEventHandler(sourceHandler, new NewMessage());
+
+    const config = readJSON(CONFIG_FILE);
+    const whiteListedGroupsSources = config.whiteListedGroups.Telegram.filter(id => id.startsWith('-100'));
+    const processedIds = new Set();
+
+    console.log(`[${getCurrentTime()}][INFO] Preparing to listen to Channels...`);
+    for (const chatId of whiteListedGroupsSources) {
+        try {
+            const messages = await selfClient.getMessages(chatId, { limit: 2 });
+            for (const msg of messages) {
+                processedIds.add(`${chatId}:${msg.id}`);
+            }
+        } catch (err) {
+            console.error(`[${getCurrentTime()}][ERROR] Preparing failed for ${chatId}:`, err.message);
+        }
+    }
+    console.log(`[${getCurrentTime()}][INFO] Listening for signals.`);
+
+    // Now start the actual polling
+    setInterval(async () => {
+        for (const chatId of whiteListedGroupsSources) {
+            try {
+                const messages = await selfClient.getMessages(chatId, { limit: 2 });
+                for (const msg of messages) {
+                    const key = `${chatId}:${msg.id}`;
+                    if (processedIds.has(key)) continue;
+                    processedIds.add(key);
+
+                    if (processedIds.size > 200) {
+                        const iterator = processedIds.values();
+                        processedIds.delete(iterator.next().value);
+                    } // hard cap for processedIds.
+
+                    await sourceHandler({ message: msg });
+                }
+            } catch (err) {
+                console.error(`[${getCurrentTime()}][ERROR] Fetch message failed for ${chatId}:`, err.message);
+            }
+        }
+    }, 2000); // polling for channels
 })();
 
 
