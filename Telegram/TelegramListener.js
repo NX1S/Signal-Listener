@@ -50,7 +50,7 @@ selfClient.setLogLevel('none');
         if (!text) return;
         const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
         if (ignoreWordFound) return; // auto ignore signal with certain words
-        const foundWords = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
+        const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
         if (!foundWords) return; // words to search for
 
         console.log(`[${getCurrentTime()}][INFO] Recieved signal.`)

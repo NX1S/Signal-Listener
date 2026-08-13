@@ -38,7 +38,7 @@ function attachMessageHandler(socket) {
             if (!text) continue;
             const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
             if (ignoreWordFound) continue; // auto ignore signal with certain words
-            const foundWords = ["buy", "sell", "gold", "xauusd", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
+            const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
             if (!foundWords) continue; // words to search for
 
             console.log(`[${getCurrentTime()}][INFO] Received signal.`);
