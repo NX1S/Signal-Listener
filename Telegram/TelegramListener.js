@@ -1,4 +1,4 @@
-const { TelegramClient } = require("telegram");
+const { TelegramClient, utils } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
 const { GoogleGenAI } = require("@google/genai");
@@ -16,7 +16,9 @@ const stringSessionSelfBot = new StringSession(process.env.STRING_SESSION);
 const CONFIG_FILE = "./config.json"; // config file location
 
 const selfClient = new TelegramClient(stringSessionSelfBot, apiIdSelfBot, apiHashSelfBot, {
-    connectionRetries: 5
+    connectionRetries: 5,
+    useWSS: true,      // wont work without it on my network
+    useIPv6: false,    // Optional but safe to keep
 });
 selfClient.setLogLevel('none');
 // ----------- Telegram Bot Logic -----------
@@ -35,15 +37,10 @@ selfClient.setLogLevel('none');
         const msg = event.message;
 
         //get the id of the signal source
-        let sourceId;
-        if (msg.peerId?.channelId != null) {
-            sourceId = '-100' + msg.peerId.channelId.toString();
-            console.log("Recieved message from channel. " + sourceId);
-        } else if (msg.peerId?.chatId != null) {
-            sourceId = '-' + msg.peerId.chatId.toString();
-            console.log("Recieved message from group. " + sourceId);
-        } else
-            sourceId = null;
+        let sourceId = null;
+        if (msg.chatId != null) {
+            sourceId = msg.chatId.toString();
+        }
 
         if (!whiteListedGroupsSources.includes(sourceId)) return;
         let text = msg.text || '';
