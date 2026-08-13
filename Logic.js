@@ -63,11 +63,12 @@ async function AiSummary(prompt, AI) {
     console.log('🚀 Logic handler started.');
 })();
 
-async function AnalyzeMessage(text, sourceId, messageId) {
+async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
     // Parse signal
     const parsed = await parseSignalFromText(text);
     if (!parsed || parsed.action === "IGNORE" || !parsed.action) {
-        console.log(`[${getCurrentTime()}][INFO] Ignored.`);
+        const title = " from " + sourceName;
+        console.log(`[${getCurrentTime()}][INFO] Ignored message${title}.`);
         return;
     }
 
@@ -78,7 +79,7 @@ async function AnalyzeMessage(text, sourceId, messageId) {
     console.log('-'.repeat(80));
 
     // Handle action (isolated logic)
-    const result = await handleSignalAction(parsed, sourceId, messageId, positions);
+    const result = await handleSignalAction(parsed, sourceId, messageId, positions, sourceName);
     if (result) {
         writeJSON(POSITIONS_FILE, positions);
 
@@ -108,7 +109,7 @@ function createPipeServer() {
         let inboundBuffer = '';
 
         socket.on('data', (chunk) => {
-            inboundBuffer += chunk.toString('utf8');
+            inboundBuffer += chunk.toString('utf8').replace(/\0/g, '');
 
             let newlineIndex;
             while ((newlineIndex = inboundBuffer.indexOf('\n')) !== -1) {
@@ -178,7 +179,7 @@ function findPositionSourceIdByMessageId(positions, messageId) {
 }
 
 function handlePipeMessage(rawMessage) {
-    if (!rawMessage || rawMessage.trim().length === 0) return;
+    if (!rawMessage || rawMessage.trim().length === 0) return;  // ← Add this
     let payload;
 
     try {
@@ -188,6 +189,7 @@ function handlePipeMessage(rawMessage) {
         return;
     }
 
+    if (payload.action === 'Ping') return;  // Ignore pings
     if (payload.action === 'PositionClosed') {
         handlePositionClosedNotification(payload);
     }
@@ -213,7 +215,7 @@ function handlePositionClosedNotification(payload) {
     writeJSON(POSITIONS_FILE, positions);
 
     const reason = payload.reason || 'closed';
-    console.log(`[${getCurrentTime()}][INFO] Removed closed position from Positions.json for ${sourceId} (messageId: ${positionId}, reason: ${reason})`);
+    console.log(`[${getCurrentTime()}][INFO] Closed position for ${sourceId}. Reason: ${reason}`);
 }
 
 // ─── SIGNAL PARSER (Domain Logic) ───
@@ -240,15 +242,15 @@ async function parseSignalFromText(text) {
 }
 
 // ─── STATE MANAGER (Business Logic) ───
-async function handleSignalAction(parsed, sourceId, messageId, positions) {
+async function handleSignalAction(parsed, sourceId, messageId, positions, sourceName) {
     const action = (parsed.action || "").toString().trim().toUpperCase();
 
     if (action === "OPEN") {
         return await handleOpenSignal(parsed, sourceId, messageId, positions);
     } else if (action === "UPDATE") {
-        return await handleUpdateSignal(parsed, sourceId, positions);
+        return await handleUpdateSignal(parsed, sourceId, positions, sourceName);
     } else if (action === "CLOSE") {
-        return await handleCloseSignal(parsed, sourceId, positions);
+        return await handleCloseSignal(parsed, sourceId, positions, sourceName);
     } else {
         console.log(`[${getCurrentTime()}][WARN] Unknown action: ${parsed.action}`);
         return null;

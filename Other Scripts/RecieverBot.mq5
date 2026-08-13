@@ -55,7 +55,7 @@ void OnStart()
          lastPipeHealthCheck = TimeCurrent();
 
          // Probe pipe health through existing handle
-         if(FileWriteInteger(pipeHandle, '\n', CHAR_VALUE) == 0)
+         if(FileWriteString(pipeHandle, "{\"action\":\"Ping\"}\n") == 0)
            {
             Print("Pipe health check failed — reconnecting...");
             int i = 1;
@@ -164,7 +164,7 @@ void WatchTrackedPositions()
       if(!PositionExistsByComment(positionId))
         {
          trackedPositionKnown[i] = false;
-         SendPositionClosedNotification(positionId, "closed");
+         SendPositionClosedNotification(positionId, "closed by SL, TP or manually");
         }
      }
   }

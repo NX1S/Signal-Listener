@@ -50,11 +50,14 @@ selfClient.setLogLevel('none');
         const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
         if (!foundWords) return; // words to search for
 
-        console.log(`[${getCurrentTime()}][INFO] Recieved signal.`)
+        const chatTitle = msg.chat?.title || msg.chat?.username || '';
+        const title = " from " + chatTitle;
+
+        console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
 
         // send over to logic.js here
         const messageId = msg.id.toString();
-        Logic.AnalyzeMessage(text, sourceId, messageId);
+        Logic.AnalyzeMessage(text, sourceId, messageId, chatTitle);
     };
     selfClient.addEventHandler(sourceHandler, new NewMessage());
 })();

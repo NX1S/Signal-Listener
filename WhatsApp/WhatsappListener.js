@@ -41,10 +41,12 @@ function attachMessageHandler(socket) {
             const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
             if (!foundWords) continue; // words to search for
 
-            console.log(`[${getCurrentTime()}][INFO] Received signal.`);
+            const title = " from " + sourceId;
+
+            console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
 
             // send over to logic.js here
-            Logic.AnalyzeMessage(text, sourceId, messageId);
+            Logic.AnalyzeMessage(text, sourceId, messageId, sourceId); // replaced sourceName with sourceId.
         }
     });
 }
