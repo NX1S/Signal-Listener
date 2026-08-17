@@ -63,10 +63,9 @@ selfClient.setLogLevel('none');
             console.error(`[${getCurrentTime()}][ERROR] Message analysis failed:`, err.message);
         }
     };
-    selfClient.addEventHandler(sourceHandler, new NewMessage());
 
     const config = readJSON(CONFIG_FILE);
-    const whiteListedGroupsSources = config.whiteListedGroups.Telegram.filter(id => id.startsWith('-100'));
+    const whiteListedGroupsSources = config.whiteListedGroups.Telegram || [];
     const processedIds = new Set();
 
     console.log(`[${getCurrentTime()}][INFO] Preparing to listen to Channels...`);
@@ -103,7 +102,7 @@ selfClient.setLogLevel('none');
                 console.error(`[${getCurrentTime()}][ERROR] Fetch message failed for ${chatId}:`, err.message);
             }
         }
-    }, 2000); // polling for channels
+    }, 8000); // polling for channels
 })();
 
 

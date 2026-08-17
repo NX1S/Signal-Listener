@@ -36,8 +36,12 @@ Rules:
 - Use null for missing prices, never 0 or empty string.
 - If price range given, set entry to the lowest for BUY, and highest for SELL.
 - When multiple TPs are present, always choose TP1, which is the closest to the entry.
+- If the TP is given in pips, translate it over to a price value. each 1 pip = 0.10$. Ex: TP at 100 pip = 10$ + entry
+- If the is a pip range present, choose the lowest one.
 - If you want to reference an entry, set it in the referenceEntry variable.
 - Return ONLY the JSON object, no markdown, no explanations
+
+make sure the numbers you parse are the correct values for each section.
 
 Message to analyze:
 `;
