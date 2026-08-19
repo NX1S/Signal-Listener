@@ -112,12 +112,12 @@ async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
         // one applies. MT5 silently no-ops whichever doesn't match.
         if (result.extraActions) {
             for (const extra of result.extraActions) {
-                await sendToMT5(buildMT5Payload(extra.action, extra.data));
+                await sendToMT5(buildMT5Payload(extra.action, extra.data), sourceName);
             }
         }
 
         // Send to MT5 (isolated transport)
-        await sendToMT5(buildMT5Payload(result.action, result.data));
+        await sendToMT5(buildMT5Payload(result.action, result.data), sourceName);
     }
 }
 
@@ -418,7 +418,7 @@ async function sendToMT5(payload, sourceName) {
             else {
                 console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5 → ${payload.action}`);
                 if (sendSignalLog) {
-                    sendSignalLog(payload.action, sourceName, payload.bid, payload.tp, payload.sl);
+                    sendSignalLog(payload, sourceName);
                 }
             }
         });

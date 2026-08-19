@@ -28,24 +28,34 @@ const defaultConfig = {
 // LOG FUNCTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function sendSignalLog(type, source, entry, tp, sl) {
+async function sendSignalLog(payload, source) {
     if (!loggerClient || !loggerClient.connected) {
         console.error(`[${getTimestamp()}][ERROR] Logger bot not connected`);
         return;
     }
 
+    const action = payload.action;
+    const entry = payload.bid ? payload.bid : payload.price;
+    const tp = payload.tp;
+    const sl = payload.sl;
+    console.log(payload.action);
+    console.log(payload.bid ? payload.bid : payload.price);
+
     const actionMap = {
         'OpenPosition': 'OPEN POSITION',
         'UpdatePosition': 'UPDATE POSITION',
-        'ClosePosition': 'CLOSE POSITION'
+        'ClosePosition': 'CLOSE POSITION',
+        'ModifyPending': 'MODIFY PENDING',
+        'CancelPending': 'CANCEL PENDING'
     };
 
-    const action = actionMap[type] || type.toUpperCase();
+    const mappedAction = actionMap[action] || action.toUpperCase();
     const timeStr = getTimestampInHoursOnly();
+    let formattedText = '';
+    if (payload.type?.toUpperCase().includes("LIMIT"))
+        formattedText = `**${mappedAction} LIMIT**\n→ ${source}`;
 
-    let formattedText = `**${action}**\n→ ${source}`;
-
-    if (type !== 'ClosePosition') {
+    if (mappedAction !== 'ClosePosition') {
         formattedText += `\nentry: ${entry}\nTP: ${tp}\nSL: ${sl}`;
     }
 
@@ -185,7 +195,7 @@ async function startLogger() {
     ensureConfigExists();
     config = loadConfig();
     console.log(`[${getTimestamp()}][INFO] LogDestinations: ${config.LogDestinations.length}`);
-    
+
 }
 
 module.exports = { sendSignalLog, startLogger };

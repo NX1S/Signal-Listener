@@ -28,7 +28,7 @@ selfClient.setLogLevel('none');
 
     await selfClient.start();
     const self = await selfClient.getMe();
-    console.log(`[${getCurrentTime()}][SYSTEM] Listener connected to Telegram with @${self.username}!`);
+    console.log(`[${getCurrentTime()}][INFO] Listener connected to Telegram with @${self.username}!`);
     //Selfbot
 
     const sourceHandler = async (event) => {
@@ -45,8 +45,8 @@ selfClient.setLogLevel('none');
         if (!whiteListedGroupsSources.includes(sourceId)) return;
         let text = msg.text || '';
         if (!text) return;
-        const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
-        if (ignoreWordFound) return; // auto ignore signal with certain words
+        const ignoreWordFound = [].some(word => text.toLowerCase().includes(word));
+        if (ignoreWordFound) return; // auto ignore signal with certain words. NOW ITS EMPTY
         const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
         if (!foundWords) return; // skip if message doesnt contain trigger word
         const chat = msg.chat || await selfClient.getEntity(msg.chatId);
