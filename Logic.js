@@ -12,8 +12,12 @@ let pipeSocket;
 
 // ─── RECONNECTION STATE ───
 let sock = null;
-const POSITIONS_FILE = "./Positions.json"; // open position file for each source
+const POSITIONS_FILE = "./Positions.json";
 
+// ─── CONFIG & LOGGER ───
+const CONFIG_FILE = "./config.json";
+const LOGGER_SCRIPT = "./Other Scripts/Logger.js"
+let sendSignalLog = null; // set only if logging is enabled
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
@@ -69,7 +73,17 @@ function isPendingType(type) {
     ensurePositionsExists();
     createPipeServer();
 
-    console.log('🚀 Logic handler started.');
+    console.log(`[${getCurrentTime()}][SYSTEM] Logic handler started.`);
+
+    const config = readJSON(CONFIG_FILE);
+
+    if (config.LogSignalsToGroup === true) {
+        const Logger = require(LOGGER_SCRIPT); // adjust path if you use Telegram/Logger.js
+        sendSignalLog = Logger.sendSignalLog;
+        await Logger.startLogger();
+    } else {
+        console.log(`[${getCurrentTime()}][INFO] Logger disabled in config.`);
+    }
 })();
 
 async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
@@ -105,8 +119,6 @@ async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
         // Send to MT5 (isolated transport)
         await sendToMT5(buildMT5Payload(result.action, result.data));
     }
-
-    console.log('-'.repeat(80));
 }
 
 function buildMT5Payload(action, data) {
@@ -137,7 +149,7 @@ function createPipeServer() {
     } catch (e) { /* ignore if doesn't exist */ }
 
     pipeServer = net.createServer((socket) => {
-        console.log(`[${getCurrentTime()}][INFO] MT5 connected to pipe`);
+        console.log(`[${getCurrentTime()}][SYSTEM] MT5 connected.`);
         pipeSocket = socket;
         let inboundBuffer = '';
 
@@ -156,7 +168,7 @@ function createPipeServer() {
         });
 
         socket.on('end', () => {
-            console.log(`[${getCurrentTime()}][WARN] MT5 disconnected`);
+            console.log(`[${getCurrentTime()}][SYSTEM] MT5 disconnected`);
             pipeSocket = null;
         });
 
@@ -166,13 +178,13 @@ function createPipeServer() {
         });
 
         socket.on('close', () => {
-            console.log(`[${getCurrentTime()}][INFO] Socket closed`);
+            console.log(`[${getCurrentTime()}][SYSTEM] Socket closed`);
             pipeSocket = null;
         });
     });
 
     pipeServer.listen(pipeName, () => {
-        console.log(`[${getCurrentTime()}][INFO] Pipe server listening on ${pipeName}`);
+        console.log(`[${getCurrentTime()}][INFO] Ready to connect to MT5.`);
     });
 
     pipeServer.on('error', (err) => {
@@ -212,7 +224,7 @@ function findPositionSourceIdByMessageId(positions, messageId) {
 }
 
 function handlePipeMessage(rawMessage) {
-    if (!rawMessage || rawMessage.trim().length === 0) return;  // ← Add this
+    if (!rawMessage || rawMessage.trim().length === 0) return;
     let payload;
 
     try {
@@ -222,7 +234,7 @@ function handlePipeMessage(rawMessage) {
         return;
     }
 
-    if (payload.action === 'Ping') return;  // Ignore pings
+    if (payload.action === 'Ping') return;
     if (payload.action === 'PositionClosed') {
         handlePositionClosedNotification(payload);
     }
@@ -245,7 +257,7 @@ function removeTrackedPosition(payload, missingLabel) {
     const sourceId = findPositionSourceIdByMessageId(positions, positionId);
 
     if (!sourceId) {
-        console.log(`[${getCurrentTime()}][INFO] ${missingLabel} notification received for unknown positionId: ${positionId}`);
+        console.log(`[${getCurrentTime()}][WARN] ${missingLabel} notification received for unknown positionId: ${positionId}`);
         return;
     }
 
@@ -295,15 +307,15 @@ async function parseSignalFromText(text) {
 }
 
 // ─── STATE MANAGER (Business Logic) ───
-async function handleSignalAction(parsed, sourceId, messageId, positions, sourceName) {
+async function handleSignalAction(parsed, sourceId, messageId, positions) {
     const action = (parsed.action || "").toString().trim().toUpperCase();
 
     if (action === "OPEN") {
         return await handleOpenSignal(parsed, sourceId, messageId, positions);
     } else if (action === "UPDATE") {
-        return await handleUpdateSignal(parsed, sourceId, positions, sourceName);
+        return await handleUpdateSignal(parsed, sourceId, positions);
     } else if (action === "CLOSE") {
-        return await handleCloseSignal(parsed, sourceId, positions, sourceName);
+        return await handleCloseSignal(parsed, sourceId, positions);
     } else {
         console.log(`[${getCurrentTime()}][WARN] Unknown action: ${parsed.action}`);
         return null;
@@ -398,12 +410,17 @@ function writeJSON(filePath, data) {
 }
 
 // ─── UNIFIED SEND TO MT5 ───
-async function sendToMT5(payload) {
+async function sendToMT5(payload, sourceName) {
     if (pipeSocket && !pipeSocket.destroyed) {
         const message = JSON.stringify(payload) + '\n';
         pipeSocket.write(message, (err) => {
             if (err) console.error(`[${getCurrentTime()}][ERROR] Pipe write error:`, err);
-            else console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5 → ${payload.action}`);
+            else {
+                console.log(`[${getCurrentTime()}][INFO] Signal sent to MT5 → ${payload.action}`);
+                if (sendSignalLog) {
+                    sendSignalLog(payload.action, sourceName, payload.bid, payload.tp, payload.sl);
+                }
+            }
         });
     } else {
         console.log(`[${getCurrentTime()}][WARN] MT5 not connected. Signal dropped: ${payload.action}`);

@@ -245,25 +245,51 @@ async function telegramMenu() {
 
 async function configMenu() {
   while (true) {
-    printHeader('Configure JSON Files');
+    printHeader('Configurations');
     console.log('1. List whitelist');
     console.log('2. Add whitelist item');
     console.log('3. Remove whitelist item');
-    console.log('4. Back');
+    console.log('4. List Log Destination Item');
+    console.log('5. Add Log Destination Item');
+    console.log('6. Remove Log Destination Item');
+    console.log('7. Toggle Action Logging');
+    console.log('8. Toggle Debug Logs');
+    console.log('9. Back');
 
     const choice = (await ask('Choose an option: ')).trim();
 
-    if (choice === '1') {
-      await listWhitelist();
-      await ask('\nPress Enter to return to the menu...');
-    } else if (choice === '2') {
-      await addWhitelistEntry();
-    } else if (choice === '3') {
-      await removeWhitelistEntry();
-    } else if (choice === '4') {
-      return;
-    } else {
-      console.log('Invalid choice.');
+    switch (choice) {
+      case '1':
+        await listWhitelist();
+        await ask('\nPress Enter to return to the menu...');
+        break;
+      case '2':
+        await addWhitelistEntry();
+        break;
+      case '3':
+        await removeWhitelistEntry();
+        break;
+      case '4':
+
+        break;
+      case '5':
+
+        break;
+      case '6':
+
+        break;
+      case '7':
+
+        break;
+      case '8':
+
+        break;
+      case '9':
+        return;
+
+      default:
+        console.log('Invalid choice.');
+        break;
     }
   }
 }
@@ -273,7 +299,7 @@ async function mainMenu() {
     printHeader('Signal Copier CLI');
     console.log('1. WhatsApp bot');
     console.log('2. Telegram bot');
-    console.log('3. Configure JSON files');
+    console.log('3. Configuration');
     console.log('4. Exit');
 
     const choice = (await ask('Choose an option: ')).trim();

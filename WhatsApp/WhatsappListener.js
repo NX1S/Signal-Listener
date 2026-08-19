@@ -122,7 +122,7 @@ async function connectWhatsApp() {
                 reconnectAttempts = 0;
                 const phone = sock.user?.id?.split('@')[0] || 'Unknown';
                 const name = sock.user?.name || 'Unknown';
-                console.log(`[${getCurrentTime()}][INFO] Listener connected to WhatsApp using ${phone} || ${name}`);
+                console.log(`[${getCurrentTime()}][SYSTEM] Listener connected to WhatsApp using ${phone} || ${name}`);
             }
 
             if (connection === 'close') {
@@ -130,12 +130,12 @@ async function connectWhatsApp() {
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
                 if (!shouldReconnect) {
-                    console.log(`[${getCurrentTime()}][FATAL] Logged out. Clearing credentials...`);
+                    console.log(`[${getCurrentTime()}][SYSTEM] Logged out. Clearing credentials...`);
 
                     // Delete auth folder to force fresh QR on next startup
                     deleteAuthFolder();
 
-                    console.log(`[${getCurrentTime()}][INFO] Stopped reconnecting. Restart the app to scan QR again.`);
+                    console.log(`[${getCurrentTime()}][WARN] Stopped reconnecting. Restart the app to scan QR again.`);
 
                     // Stop reconnection attempts permanently
                     reconnectAttempts = MAX_RECONNECT_ATTEMPTS + 1;
@@ -166,7 +166,7 @@ function scheduleReconnect() {
     clearReconnectTimer();
 
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        console.log(`[${getCurrentTime()}][FATAL] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
+        console.log(`[${getCurrentTime()}][SYSTEM] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping.`);
         return;
     }
 

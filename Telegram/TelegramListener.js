@@ -28,7 +28,7 @@ selfClient.setLogLevel('none');
 
     await selfClient.start();
     const self = await selfClient.getMe();
-    console.log(`[${getCurrentTime()}][INFO] Listener connected to Telegram with @${self.username}!`);
+    console.log(`[${getCurrentTime()}][SYSTEM] Listener connected to Telegram with @${self.username}!`);
     //Selfbot
 
     const sourceHandler = async (event) => {
