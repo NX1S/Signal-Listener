@@ -1,6 +1,11 @@
 {
-  "whiteListedGroups" : {
-    "Whatsapp":["123456789@g.us", "0000000000@g.us"],
-    "Telegram":["-1234567891","-1001234567891"]
-  }
+  "whiteListedGroups": {
+    "Whatsapp": ["123456789@g.us", "0000000000@g.us"],
+    "Telegram": ["-1234567891","-1001234567891"]
+  },
+  "LogDestination": [
+    "-1001234567891"
+  ],
+  "LogSignalsToGroup": false,
+  "DebugLogs": false
 }
