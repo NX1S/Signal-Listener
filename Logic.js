@@ -12,11 +12,11 @@ let pipeSocket;
 
 // ─── RECONNECTION STATE ───
 let sock = null;
-const POSITIONS_FILE = "./Positions.json";
 
 // ─── CONFIG & LOGGER ───
 const CONFIG_FILE = "./config.json";
 const LOGGER_SCRIPT = "./Other Scripts/Logger.js"
+const POSITIONS_FILE = "./Positions.json";
 let sendSignalLog = null; // set only if logging is enabled
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
@@ -79,15 +79,15 @@ function isPendingType(type) {
     const config = readJSON(CONFIG_FILE);
 
     if (config.LogSignalsToGroup === true) {
-        const Logger = require(LOGGER_SCRIPT); // adjust path if you use Telegram/Logger.js
-        sendSignalLog = Logger.sendSignalLog;
+        const Logger = require(LOGGER_SCRIPT);
+        sendSignalLog = Logger.sendSignalLog; // logger not declared in main scope, so set the function to global.
         await Logger.startLogger();
     } else {
         console.log(`[${getCurrentTime()}][INFO] Logger disabled in config.`);
     }
 })();
 
-async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
+async function AnalyzeMessage(text, sourceId, sourceName) {
     // Parse signal
     const parsed = await parseSignalFromText(text);
     if (!parsed || parsed.action === "IGNORE" || !parsed.action) {
@@ -103,7 +103,7 @@ async function AnalyzeMessage(text, sourceId, messageId, sourceName) {
     console.log('-'.repeat(80));
 
     // Handle action (isolated logic)
-    const result = await handleSignalAction(parsed, sourceId, messageId, positions, sourceName);
+    const result = await handleSignalAction(parsed, sourceId, positions, sourceName);
     if (result) {
         writeJSON(POSITIONS_FILE, positions);
 
@@ -128,7 +128,7 @@ function buildMT5Payload(action, data) {
         type: data.type,
         tp: data.tp,
         sl: data.sl,
-        positionId: data.messageId,
+        comment: data.comment,
         timestamp: Date.now()
     };
 
@@ -212,11 +212,11 @@ function readPositions() {
     }
 }
 
-function findPositionSourceIdByMessageId(positions, messageId) {
+function findPositionSourceIdByComment(positions, positionComment) {
     const entries = Object.entries(positions);
 
     for (const [sourceId, position] of entries) {
-        if (position && position.messageId === messageId) {
+        if (position && position.comment === positionComment) {
             return sourceId;
         }
     }
@@ -245,24 +245,28 @@ function handlePipeMessage(rawMessage) {
 }
 
 // Shared by both PositionClosed and PendingOrderRemoved: find the tracked
-// entry by its positionId (messageId) and drop it from Positions.json.
-function removeTrackedPosition(payload, missingLabel) {
-    const positionId = typeof payload.positionId === 'string' ? payload.positionId.trim() : '';
+// entry by its positionComment and drop it from Positions.json.
+function removeTrackedPosition(payload, type) {
+    const positionComment = typeof payload.positionId === 'string' ? payload.positionId.trim() : '';
 
-    if (!positionId) {
-        console.log(`[${getCurrentTime()}][WARN] Ignoring ${missingLabel} notification without positionId.`);
+    if (!positionComment) {
+        console.log(`[${getCurrentTime()}][WARN] Ignoring ${type} notification without positionComment.`);
         return;
     }
 
     const positions = readPositions();
-    const sourceId = findPositionSourceIdByMessageId(positions, positionId);
+    const sourceId = findPositionSourceIdByComment(positions, positionComment);
 
     if (!sourceId) {
-        console.log(`[${getCurrentTime()}][WARN] ${missingLabel} notification received for unknown positionId: ${positionId}`);
+        console.log(`[${getCurrentTime()}][WARN] ${type} notification received for unknown positionComment: ${positionComment}`);
         return;
     }
 
     delete positions[sourceId];
+    //HERE
+    if (sendSignalLog) {
+        sendSignalLog(payload, payload.positionId);
+    }
     writeJSON(POSITIONS_FILE, positions);
 
     return sourceId;
@@ -308,11 +312,11 @@ async function parseSignalFromText(text) {
 }
 
 // ─── STATE MANAGER (Business Logic) ───
-async function handleSignalAction(parsed, sourceId, messageId, positions) {
+async function handleSignalAction(parsed, sourceId, positions, sourceName) {
     const action = (parsed.action || "").toString().trim().toUpperCase();
 
     if (action === "OPEN") {
-        return await handleOpenSignal(parsed, sourceId, messageId, positions);
+        return await handleOpenSignal(parsed, sourceId, positions, sourceName);
     } else if (action === "UPDATE") {
         return await handleUpdateSignal(parsed, sourceId, positions);
     } else if (action === "CLOSE") {
@@ -323,12 +327,12 @@ async function handleSignalAction(parsed, sourceId, messageId, positions) {
     }
 }
 
-async function handleOpenSignal(parsed, sourceId, messageId, positions) {
+async function handleOpenSignal(parsed, sourceId, positions, sourceName) {
     if (!isCompleteSignal(parsed)) {
         console.log(`[${getCurrentTime()}][WARN] Incomplete OPEN signal. Required: entry, tp, sl. Skipping.`);
         return null;
     }
-    const truncatedId = messageId.substring(0, 31);
+    const truncatedComment = sourceName.substring(0, 31);
 
     // If this source already had a tracked position and it was a LIMIT order,
     // we're about to overwrite its record with the new signal. If that old
@@ -340,7 +344,7 @@ async function handleOpenSignal(parsed, sourceId, messageId, positions) {
         : undefined;
 
     positions[sourceId] = {
-        messageId: truncatedId,
+        comment: truncatedComment,
         type: parsed.positionType,
         entry: parsed.entry,
         tp: parsed.tp,

@@ -42,6 +42,11 @@ selfClient.setLogLevel('none');
             sourceId = msg.chatId.toString();
         }
 
+        // Check if message is older than 5 minutes (skip loading messages)
+        const msgTime = msg.date * 1000; // Convert to ms
+        const currentTime = Date.now();
+        if (currentTime - msgTime > 5 * 60 * 1000) return;
+        
         if (!whiteListedGroupsSources.includes(sourceId)) return;
         let text = msg.text || '';
         if (!text) return;
@@ -51,14 +56,12 @@ selfClient.setLogLevel('none');
         if (!foundWords) return; // skip if message doesnt contain trigger word
         const chat = msg.chat || await selfClient.getEntity(msg.chatId);
         const chatTitle = chat?.title || chat?.username || '';
-        const title = " from " + chatTitle;
 
-        console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
+        console.log(`[${getCurrentTime()}][INFO] Received signal from ${chatTitle}.`);
 
         // send over to logic.js here
-        const messageId = msg.id.toString();
         try {
-            await Logic.AnalyzeMessage(text, sourceId, messageId, chatTitle);
+            await Logic.AnalyzeMessage(text, sourceId, chatTitle);
         } catch (err) {
             console.error(`[${getCurrentTime()}][ERROR] Message analysis failed:`, err.message);
         }

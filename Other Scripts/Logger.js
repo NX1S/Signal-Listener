@@ -35,18 +35,14 @@ async function sendSignalLog(payload, source) {
     }
 
     const action = payload.action;
-    const entry = payload.bid ? payload.bid : payload.price;
-    const tp = payload.tp;
-    const sl = payload.sl;
-    console.log(payload.action);
-    console.log(payload.bid ? payload.bid : payload.price);
-
     const actionMap = {
         'OpenPosition': 'OPEN POSITION',
         'UpdatePosition': 'UPDATE POSITION',
+        'ModifyPending': 'MODIFY LIMIT',
         'ClosePosition': 'CLOSE POSITION',
-        'ModifyPending': 'MODIFY PENDING',
-        'CancelPending': 'CANCEL PENDING'
+        'PositionClosed': 'CLOSED POSITION',
+        'CancelPending': 'CANCEL LIMIT',
+        'PendingOrderRemoved': 'CANCELED LIMIT'
     };
 
     const mappedAction = actionMap[action] || action.toUpperCase();
@@ -57,10 +53,12 @@ async function sendSignalLog(payload, source) {
     else
         formattedText = `**${mappedAction} LIMIT**\n→ ${source}`;
 
-    if (mappedAction !== 'ClosePosition') {
+    if (!['PendingOrderRemoved','CancelPending','PositionClosed','ClosePosition'].some(word => action.includes(word))) {
+        const entry = payload.bid ? payload.bid : payload.price;
+        const tp = payload.tp;
+        const sl = payload.sl;
         formattedText += `\nentry: ${entry}\nTP: ${tp}\nSL: ${sl}`;
     }
-
     formattedText += `\n@ ${timeStr}`;
 
     for (const destId of config.LogDestinations) {

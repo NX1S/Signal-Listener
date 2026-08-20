@@ -16,8 +16,6 @@ const CONFIG_FILE = "./config.json"; // config file location
 // ─── MAIN ENTRY ───
 (async () => {
     ensureConfigExists();
-
-    console.log('🚀 Listener started. Waiting for QR code...');
     await connectWhatsApp();
 })();
 
@@ -30,8 +28,12 @@ function attachMessageHandler(socket) {
     socket.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
 
+            // Check if message is older than 5 minutes (skip loading messages)
+            const msgTime = msg.messageTimestamp * 1000; // Convert to ms
+            const currentTime = Date.now();
+            if (currentTime - msgTime > 5 * 60 * 1000) continue;
+
             const sourceId = msg.key.remoteJid;
-            const messageId = msg.key.id;
             if (!whiteListedGroupsSources.includes(sourceId)) continue;
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
@@ -41,13 +43,19 @@ function attachMessageHandler(socket) {
             const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
             if (!foundWords) continue; // words to search for
 
-            const title = " from " + sourceId;
+            let sourceName;
+            try {
+                const groupMeta = await sock.groupMetadata(sourceId);
+                sourceName = groupMeta.subject;
+            } catch {
+                sourceName = sourceId;
+            }
 
-            console.log(`[${getCurrentTime()}][INFO] Received signal${title}.`);
+            console.log(`[${getCurrentTime()}][INFO] Received signal from ${sourceName}.`);
 
             // send over to logic.js here
             try {
-                await Logic.AnalyzeMessage(text, sourceId, messageId, sourceId);
+                await Logic.AnalyzeMessage(text, sourceId, sourceName);
             } catch (err) {
                 console.error(`[${getCurrentTime()}][ERROR] Message analysis failed:`, err.message);
             } // replaced sourceName with sourceId.
@@ -114,7 +122,7 @@ async function connectWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                console.log('\n📱 Scan this QR code with WhatsApp → Settings → Linked Devices:\n');
+                console.log(`[${getCurrentTime()}][SYSTEM] Scan this QR code with WhatsApp → Settings → Linked Devices:\n`);
                 qrcode.generate(qr, { small: true });
             }
 

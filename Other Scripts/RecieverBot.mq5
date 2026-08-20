@@ -391,7 +391,7 @@ void ProcessMessage(string message)
   {
    string action = ExtractJsonString(message, "action");
    string type = ExtractJsonString(message, "type");
-   string positionId = ExtractJsonString(message, "positionId");
+   string positionId = ExtractJsonString(message, "comment");
    double signalBid = ExtractJsonDouble(message, "bid");
    double signalPrice = ExtractJsonDouble(message, "price");
    double tp = ExtractJsonDouble(message, "tp");
