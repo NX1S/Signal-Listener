@@ -43,6 +43,7 @@ Rules:
 - When multiple TPs are present, always choose TP1, which is the closest to the entry.
 - If the TP is given in pips, translate it over to a price value. each 1 pip = 0.10$. Ex: TP at 100 pip = 10$ + entry
 - If the is a pip range present, choose the lowest one.
+- If a full signal is present (e.g. entry, sl and tp) but the tp isnt labeled as in pips or a value, put it as 50 pips.
 - If you want to reference an entry, set it in the referenceEntry variable.
 - Return ONLY the JSON object, no markdown, no explanations
 
