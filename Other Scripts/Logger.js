@@ -52,7 +52,9 @@ async function sendSignalLog(payload, source) {
     const mappedAction = actionMap[action] || action.toUpperCase();
     const timeStr = getTimestampInHoursOnly();
     let formattedText = '';
-    if (payload.type?.toUpperCase().includes("LIMIT"))
+    if (!payload.type?.toUpperCase().includes("LIMIT"))
+        formattedText = `**${mappedAction}**\n→ ${source}`;
+    else
         formattedText = `**${mappedAction} LIMIT**\n→ ${source}`;
 
     if (mappedAction !== 'ClosePosition') {
