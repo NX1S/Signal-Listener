@@ -36,8 +36,6 @@ function attachMessageHandler(socket) {
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             if (!text) continue;
-            const ignoreWordFound = ["limit"].some(word => text.toLowerCase().includes(word));
-            if (ignoreWordFound) continue; // auto ignore signal with certain words
             const foundWords = ["buy", "sell", "close", "tp", "sl", "breakeven", "exit"].some(word => text.toLowerCase().includes(word));
             if (!foundWords) continue; // words to search for
 

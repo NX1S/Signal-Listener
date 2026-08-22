@@ -10,6 +10,7 @@ input double LotSize = 0.01;
 input double Slippage = 50;
 input int    PollIntervalMs = 100;
 input int    PositionWatchPollMs = 1000;
+input int    HeartbeatIntervalSec = 300;
 
 string   pipePath;
 int      pipeHandle = INVALID_HANDLE;
@@ -21,6 +22,7 @@ bool     trackedPendingKnown[];
 datetime lastPositionScan = 0;
 datetime lastPendingScan = 0;
 datetime lastPipeHealthCheck = 0;
+datetime lastHeartbeat = 0;
 const int    PipeHealthCheckSec = 15;
 
 //+------------------------------------------------------------------+
@@ -79,6 +81,14 @@ void OnStart()
             else
                Print("Failed to reconnect to Listener.");
            }
+        }
+      // ─────────────────────────
+
+      // ─── Status heartbeat ───
+      if(TimeCurrent() - lastHeartbeat >= HeartbeatIntervalSec)
+        {
+         lastHeartbeat = TimeCurrent();
+         SendStatusHeartbeat();
         }
       // ─────────────────────────
 
@@ -238,6 +248,55 @@ bool PositionExistsByComment(string positionId)
         }
      }
    return false;
+  }
+
+//+------------------------------------------------------------------+
+void SendStatusHeartbeat()
+  {
+   if(pipeHandle == INVALID_HANDLE)
+      return;
+
+   string openList = "";
+   int posTotal = PositionsTotal();
+   for(int i = 0; i < posTotal; i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(comment == "")
+         continue;
+      if(openList != "")
+         openList += ",";
+      openList += "\"" + comment + "\"";
+     }
+
+   string pendingList = "";
+   int ordTotal = OrdersTotal();
+   for(int i = 0; i < ordTotal; i++)
+     {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+      string comment = OrderGetString(ORDER_COMMENT);
+      if(comment == "")
+         continue;
+      if(pendingList != "")
+         pendingList += ",";
+      pendingList += "\"" + comment + "\"";
+     }
+
+   string payload = "{\"action\":\"StatusHeartbeat\",\"openPositions\":[" + openList +
+                     "],\"pendingOrders\":[" + pendingList + "],\"timestamp\":" +
+                     (string)(long)TimeCurrent() + "}\n";
+
+   uchar bytes[];
+   StringToCharArray(payload, bytes, 0, WHOLE_ARRAY, CP_UTF8);
+
+   if(FileWriteArray(pipeHandle, bytes, 0, ArraySize(bytes)) == 0)
+      Print("Failed to send status heartbeat");
+   else
+      Print("Sent status heartbeat. Open positions: ", posTotal, " | Pending orders: ", ordTotal);
   }
 
 //+------------------------------------------------------------------+

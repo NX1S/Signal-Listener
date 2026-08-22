@@ -14,6 +14,12 @@ let pipeSocket;
 let sock = null;
 const POSITIONS_FILE = "./Positions.json"; // open position file for each source
 
+// If a source's position was opened more recently than this, ignore it during
+// heartbeat reconciliation — it may not have propagated to MT5's live state
+// yet, and we don't want to wrongly delete something that's actually still
+// mid-open.
+const HEARTBEAT_GRACE_MS = 2 * 60 * 1000;
+
 
 const signalSummaryPrompt = `You are a trading signal formatter and classifier for XAUUSD only. Classify the message into exactly ONE action and return ONLY a JSON object, no markdown, no explanations and no thoughts:
 - "UPDATE": A message that explicitly moves/changes the take profit or stop loss of an ALREADY OPEN trade (e.g., "TP1 AS 4043", "MOVE SL TO 4045", "SL TO BREAKEVEN"). For TP updates, extract only the new tp price. For SL updates, extract the new sl price if a number is given. If the message says "breakeven", "BE", or "at entry" / "to entry" with no number, return the string "BREAKEVEN".
@@ -229,6 +235,9 @@ function handlePipeMessage(rawMessage) {
     if (payload.action === 'PendingOrderRemoved') {
         handlePendingOrderRemovedNotification(payload);
     }
+    if (payload.action === 'StatusHeartbeat') {
+        handleStatusHeartbeat(payload);
+    }
 }
 
 // Shared by both PositionClosed and PendingOrderRemoved: find the tracked
@@ -261,6 +270,41 @@ function handlePendingOrderRemovedNotification(payload) {
 
     const reason = payload.reason || 'removed';
     console.log(`[${getCurrentTime()}][INFO] Pending order removed for ${sourceId} (never filled). Reason: ${reason}`);
+}
+
+// MT5 reports everything it currently sees as open (positions + pending
+// orders) every HeartbeatIntervalSec. Anything we're still tracking in
+// Positions.json that ISN'T in that list is gone from MT5's perspective —
+// most commonly because it was closed manually in the terminal, but this
+// also catches anything a missed close/cancel notification would have let
+// slip through (e.g. a pipe reconnect gap or script restart).
+function handleStatusHeartbeat(payload) {
+    const openPositions = Array.isArray(payload.openPositions) ? payload.openPositions : [];
+    const pendingOrders = Array.isArray(payload.pendingOrders) ? payload.pendingOrders : [];
+    const liveIds = new Set([...openPositions, ...pendingOrders]);
+
+    const positions = readPositions();
+    const now = Date.now();
+    let changed = false;
+
+    for (const [sourceId, position] of Object.entries(positions)) {
+        if (!position || !position.messageId) continue;
+        if (liveIds.has(position.messageId)) continue;
+
+        const openedAt = position.openedAt || 0;
+        if (now - openedAt < HEARTBEAT_GRACE_MS) {
+            // Too new — might just not have reached MT5's state yet.
+            continue;
+        }
+
+        console.log(`[${getCurrentTime()}][INFO] Heartbeat reconciliation: ${sourceId} (${position.messageId}) not found on MT5 — removing (likely closed or cancelled manually).`);
+        delete positions[sourceId];
+        changed = true;
+    }
+
+    if (changed) {
+        writeJSON(POSITIONS_FILE, positions);
+    }
 }
 
 function handlePositionClosedNotification(payload) {
@@ -331,7 +375,8 @@ async function handleOpenSignal(parsed, sourceId, messageId, positions) {
         type: parsed.positionType,
         entry: parsed.entry,
         tp: parsed.tp,
-        sl: parsed.sl
+        sl: parsed.sl,
+        openedAt: Date.now()
     };
     return { action: "OpenPosition", data: positions[sourceId], extraActions };
 }
